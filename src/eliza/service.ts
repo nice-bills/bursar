@@ -84,6 +84,8 @@ export class BursarService extends Service {
       baseUrl: setting(runtime, "KEEPERHUB_BASE_URL"),
     });
     this.ledger = new Ledger(ledgerPath);
+    // One writer per ledger file. Fails loudly if another process holds it.
+    await this.ledger.acquire();
     this.executor = new Executor(
       this.client,
       this.ledger,
@@ -93,8 +95,9 @@ export class BursarService extends Service {
   }
 
   override async stop(): Promise<void> {
-    // Nothing to tear down: the client is stateless and the ledger is written
-    // append-only per call, so there is no buffered state to lose on shutdown.
+    // The client is stateless and the ledger is written append-only per call,
+    // so there is no buffered state to lose — only the write lock to hand back.
+    await this.ledger?.release();
   }
 
   get treasuryConfig(): BursarConfig {

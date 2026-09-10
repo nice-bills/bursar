@@ -12,7 +12,7 @@
  * everything else at this size.
  */
 
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, writeFile, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 
@@ -44,8 +44,93 @@ export interface LedgerEntry {
   at: string;
 }
 
+/** A crashed holder should not wedge the treasury forever. */
+const LOCK_STALE_MS = 10 * 60 * 1000;
+
 export class Ledger {
-  constructor(private readonly path = "data/ledger.jsonl") {}
+  private lockPath: string;
+  private holdsLock = false;
+
+  constructor(private readonly path = "data/ledger.jsonl") {
+    this.lockPath = `${this.path}.lock`;
+  }
+
+  /**
+   * Claim exclusive write access to this ledger file.
+   *
+   * The executor's mutex serialises movements within one process. It says
+   * nothing about two processes — an agent and a script, or two agents pointed
+   * at the same file — and those would each read the ledger before either
+   * wrote, exactly the race the mutex exists to prevent.
+   *
+   * Advisory, not enforced by the OS: a stale lock from a killed process is
+   * taken over rather than honoured, because a treasury that cannot reconcile
+   * after a crash is worse than one that risks a rare concurrent write.
+   */
+  async acquire(): Promise<void> {
+    if (this.holdsLock) return;
+    await mkdir(dirname(this.path), { recursive: true });
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await writeFile(
+          this.lockPath,
+          JSON.stringify({ pid: process.pid, at: new Date().toISOString() }),
+          { flag: "wx" },
+        );
+        this.holdsLock = true;
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+
+        const holder = await this.readLock();
+        if (holder && this.holderIsAlive(holder)) {
+          throw new Error(
+            `Ledger ${this.path} is locked by pid ${holder.pid} (since ${holder.at}). ` +
+              `Another Bursar process is writing it. Stop it, or point this one at a ` +
+              `different BURSAR_LEDGER_PATH.`,
+          );
+        }
+        // Stale or unreadable: take it over and retry the exclusive create.
+        await unlink(this.lockPath).catch(() => undefined);
+      }
+    }
+    throw new Error(`Could not acquire the ledger lock at ${this.lockPath}`);
+  }
+
+  async release(): Promise<void> {
+    if (!this.holdsLock) return;
+    this.holdsLock = false;
+    await unlink(this.lockPath).catch(() => undefined);
+  }
+
+  private async readLock(): Promise<{ pid: number; at: string } | null> {
+    try {
+      const parsed = JSON.parse(await readFile(this.lockPath, "utf8")) as {
+        pid?: number;
+        at?: string;
+      };
+      if (typeof parsed.pid !== "number" || typeof parsed.at !== "string") return null;
+      return { pid: parsed.pid, at: parsed.at };
+    } catch {
+      return null;
+    }
+  }
+
+  private holderIsAlive(holder: { pid: number; at: string }): boolean {
+    if (Date.now() - new Date(holder.at).getTime() > LOCK_STALE_MS) return false;
+    // Deliberately no exemption for our own pid: two Ledger instances in one
+    // process pointed at the same file is a bug worth surfacing, not a case to
+    // wave through. Re-acquiring on the same instance is already a no-op, and
+    // a genuine stale lock after a same-pid restart clears on the timeout.
+    try {
+      // Signal 0 tests for existence without touching the process.
+      process.kill(holder.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   /**
    * Derive a stable intent id from the movement's identity.

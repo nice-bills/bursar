@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -140,6 +140,90 @@ describe("concurrent movements cannot breach the daily cap", () => {
       assert.equal(results[0]?.result, "blocked");
       assert.equal(results[1]?.result, "confirmed", "a rejection must not block the queue");
       assert.equal(results[2]?.result, "confirmed");
+    });
+  });
+});
+
+describe("ledger locking keeps two processes apart", () => {
+  async function withDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+    const dir = await mkdtemp(join(tmpdir(), "bursar-lock-"));
+    try {
+      return await fn(dir);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a second holder is refused while the first is alive", async () => {
+    await withDir(async (dir) => {
+      const path = join(dir, "ledger.jsonl");
+      const first = new Ledger(path);
+      const second = new Ledger(path);
+
+      await first.acquire();
+      // The lock records this process's pid, which is obviously alive.
+      await assert.rejects(() => second.acquire(), /locked by pid/);
+      await first.release();
+    });
+  });
+
+  test("the lock is released and can be retaken", async () => {
+    await withDir(async (dir) => {
+      const path = join(dir, "ledger.jsonl");
+      const first = new Ledger(path);
+      await first.acquire();
+      await first.release();
+
+      const second = new Ledger(path);
+      await second.acquire();
+      await second.release();
+    });
+  });
+
+  test("acquiring twice from the same holder is a no-op", async () => {
+    await withDir(async (dir) => {
+      const ledger = new Ledger(join(dir, "ledger.jsonl"));
+      await ledger.acquire();
+      await ledger.acquire();
+      await ledger.release();
+    });
+  });
+
+  test("a lock from a dead process is taken over, not honoured", async () => {
+    await withDir(async (dir) => {
+      const path = join(dir, "ledger.jsonl");
+      // A pid that cannot be running. A treasury that will not reconcile after
+      // a crash is worse than one that risks a rare concurrent write.
+      await writeFile(
+        `${path}.lock`,
+        JSON.stringify({ pid: 2147483000, at: new Date().toISOString() }),
+        "utf8",
+      );
+      const ledger = new Ledger(path);
+      await ledger.acquire();
+      await ledger.release();
+    });
+  });
+
+  test("a stale lock is taken over even if the pid is alive", async () => {
+    await withDir(async (dir) => {
+      const path = join(dir, "ledger.jsonl");
+      const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      await writeFile(`${path}.lock`, JSON.stringify({ pid: process.pid, at: old }), "utf8");
+
+      const ledger = new Ledger(path);
+      await ledger.acquire();
+      await ledger.release();
+    });
+  });
+
+  test("a corrupt lock file does not wedge the ledger", async () => {
+    await withDir(async (dir) => {
+      const path = join(dir, "ledger.jsonl");
+      await writeFile(`${path}.lock`, "{not json", "utf8");
+      const ledger = new Ledger(path);
+      await ledger.acquire();
+      await ledger.release();
     });
   });
 });

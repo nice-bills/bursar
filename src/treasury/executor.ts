@@ -255,13 +255,23 @@ export class Executor {
   }
 
   /**
-   * Preferred chain for a payout. MEV protection only exists on some chains,
-   * and money leaving the treasury is exactly what you want shielded.
+   * The chain a payout goes out on.
+   *
+   * This used to prefer a private-mempool chain and silently redirect there
+   * when the treasury sat elsewhere — so a treasury funded on Base would send
+   * its payouts on Ethereum mainnet, where it holds nothing. Every transfer
+   * would fail, and the MEV protection bought nothing because no value moved.
+   *
+   * Money moves on the chain that holds it. Private routing is a property of
+   * that chain, not a reason to change it. `payoutChainId` exists for a
+   * deliberate cross-chain payout, and is the caller's responsibility to fund.
    */
   payoutChain(): number {
-    const configured = this.config.treasury.chainId;
-    return PRIVATE_MEMPOOL_CHAINS.includes(configured)
-      ? configured
-      : (PRIVATE_MEMPOOL_CHAINS[0] ?? configured);
+    return this.config.treasury.payoutChainId ?? this.config.treasury.chainId;
+  }
+
+  /** Whether payouts on the chosen chain get MEV-protected submission. */
+  payoutChainIsPrivate(): boolean {
+    return PRIVATE_MEMPOOL_CHAINS.includes(this.payoutChain());
   }
 }

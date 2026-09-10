@@ -109,7 +109,13 @@ process that dies between "money left" and "we wrote it down".
   fired at once will each read the ledger before any writes, all pass, and
   breach the cap tenfold. ElizaOS dispatches actions concurrently, so this is
   real. `Executor` holds a mutex across check-and-record; throughput is worth
-  nothing if the balance is wrong.
+  nothing if the balance is wrong. Across *processes*, the ledger takes an
+  advisory lock — with stale-holder takeover, because a treasury that cannot
+  reconcile after a crash is worse than one that risks a rare concurrent write.
+- **Payouts go out on the chain that holds the money.** Preferring a
+  private-mempool chain used to silently redirect them: a treasury funded on
+  Base would pay out on Ethereum mainnet, where it holds nothing, so every
+  transfer failed and the MEV protection bought nothing.
 - **Amounts are read strictly from natural language.** "pay the 3 contributors
   0.01 each" must not become three ether. When more than one number could be
   the amount, Bursar refuses and asks.
@@ -232,13 +238,9 @@ Stated plainly, since the submission form asks.
   path has not been exercised.
 - The float decision runs in-process, so it does not survive the agent being
   down — see the resolver limitation above.
-- `Executor.payoutChain()` prefers a private-mempool chain, but there is no
-  fallback story if the treasury holds no funds there.
 - Spending limits are denominated in the native asset only. ERC-20 movements
   are refused outright rather than measured against a cap that does not apply
   to them, which is what blocks the yield leg today.
-- The mutex is per-process. Two processes sharing one ledger file could still
-  race; the service is a runtime singleton, so this holds for one agent.
 - Free OpenRouter models are rate-limited and go "temporarily overloaded"
   without warning, so `npm run agent` tries several in turn. With no
   `OPENROUTER_API_KEY` it falls back to a deterministic stub, which exercises

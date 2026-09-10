@@ -82,6 +82,12 @@ export const configSchema = z
     treasury: z.object({
       chainId: z.number().int().positive(),
       address: address.optional(),
+      /**
+       * Send payouts on a different chain from the treasury's own. Only set
+       * this if that chain is funded — nothing here checks, and a payout on an
+       * unfunded chain simply fails.
+       */
+      payoutChainId: z.number().int().positive().optional(),
     }),
     contributors: z.array(contributorSchema).min(1),
     float: z.array(floatSchema).default([]),
