@@ -1,5 +1,5 @@
 {
-  "name": "bursar",
+  "name": "plugin-bursar",
   "version": "0.1.0",
   "private": true,
   "description": "The autonomous CFO for AI agents. MCP in, KeeperHub out.",
@@ -27,5 +27,10 @@
   },
   "allowScripts": {
     "esbuild@0.28.2": true
-  }
+  },
+  "peerDependencies": {
+    "@elizaos/core": "^1.7.2"
+  },
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts"
 }
