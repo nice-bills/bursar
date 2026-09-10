@@ -16,13 +16,21 @@ Built for the KeeperHub Agent Economy Hackathon. Integration target: **ElizaOS**
 ## Proof it works
 
 Real transactions on Ethereum Sepolia, executed by the plugin's
-`PAY_CONTRIBUTORS` action distributing revenue 50/30/20:
+`PAY_CONTRIBUTORS` action distributing revenue 60/40 to the configured
+contributors:
 
-| Contributor | Share | Transaction |
+| Contributor | Share | Amount | Transaction |
+| --- | --- | --- | --- |
+| model-provider | 60% | 0.0000018 | [`0xc74c0114…`](https://sepolia.etherscan.io/tx/0xc74c01140f72d5080a1071abaab64b8dfb1d95a37096bad4bfe8a5ca29a30257) |
+| tool-author | 40% | 0.0000012 | [`0xa8b451ef…`](https://sepolia.etherscan.io/tx/0xa8b451ef8376498859d6bceb007efa3315ae409d81d738f321a747e294686939) |
+
+Crash recovery, proven against the live API rather than asserted
+(`npm run chaos -- --execute`):
+
+| Scenario | Outcome | Transaction |
 | --- | --- | --- |
-| model-provider | 50% | [`0xf044678e…`](https://sepolia.etherscan.io/tx/0xf044678e3d72c312d6bdba880b41a76fd012624b899077096e62204590342bbd) |
-| tool-author | 30% | [`0xd025aff1…`](https://sepolia.etherscan.io/tx/0xd025aff1846711621e015e07f19c7512b3fec9b2989fc7d195f6b4f809524281) |
-| host | 20% | [`0x65d50e85…`](https://sepolia.etherscan.io/tx/0x65d50e85c5277539fc01c6fa75a1d9bca5a992a4a65aa283837f455f128213ca) |
+| Crash **before** submit | reconcile completes the approved movement | [`0x15f8431a…`](https://sepolia.etherscan.io/tx/0x15f8431a0f125205b46aaaa5ac2bf1b5000a463ee5c19e0cf0c95cf336ed4a8c) |
+| Crash **after** submit | reconcile recovers the *original* transaction, no second transfer | [`0x179a1859…`](https://sepolia.etherscan.io/tx/0x179a18592959181196d6563a3f8f4f7e7f6d9250a2acecbe9679f34f291434c9) |
 
 Reproduce with `npm run demo -- --execute`. Run it twice: the second run pays
 nobody, because every movement is idempotent by construction.
