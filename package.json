@@ -15,7 +15,8 @@
     "chains": "tsx scripts/chains.ts",
     "test": "node --import tsx --test test/*.test.ts",
     "demo": "tsx scripts/demo.ts",
-    "workflow": "tsx scripts/workflow.ts"
+    "workflow": "tsx scripts/workflow.ts",
+    "chaos": "tsx scripts/chaos.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

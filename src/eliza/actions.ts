@@ -17,7 +17,8 @@ import type {
 } from "@elizaos/core";
 
 import { BursarService } from "./service.js";
-import { parseUnits, formatUnits, NATIVE_DECIMALS, UnitsError } from "../units.js";
+import { extractAmount } from "./amount.js";
+import { formatUnits, NATIVE_DECIMALS } from "../units.js";
 
 function getService(runtime: IAgentRuntime): BursarService | undefined {
   return runtime.getService<BursarService>(BursarService.serviceType) ?? undefined;
@@ -35,21 +36,6 @@ async function respond(
   await callback?.({ text });
 }
 
-/**
- * Pull an amount out of natural language: "pay out 0.5", "distribute 0.02 ETH".
- * Returns base units, or null when the message names no amount.
- */
-function extractAmount(text: string): bigint | null {
-  const match = text.match(/(\d+(?:\.\d+)?)\s*(?:eth|ether)?/i);
-  if (!match?.[1]) return null;
-  try {
-    return parseUnits(match[1], NATIVE_DECIMALS);
-  } catch (error) {
-    if (error instanceof UnitsError) return null;
-    throw error;
-  }
-}
-
 export const payContributorsAction: Action = {
   name: "PAY_CONTRIBUTORS",
   similes: ["DISTRIBUTE_REVENUE", "SPLIT_EARNINGS", "PAY_OUT", "SETTLE_SHARES"],
@@ -62,7 +48,7 @@ export const payContributorsAction: Action = {
     if (!(await treasuryReady(runtime))) return false;
     // Refuse to offer a payout when no amount is stated — guessing how much of
     // the treasury to distribute is not a recoverable mistake.
-    return extractAmount(message.content?.text ?? "") !== null;
+    return extractAmount(message.content?.text ?? "", NATIVE_DECIMALS).ok;
   },
 
   handler: async (
@@ -77,12 +63,14 @@ export const payContributorsAction: Action = {
       return { success: false, error: "Bursar treasury service is not running." };
     }
 
-    const amount = extractAmount(message.content?.text ?? "");
-    if (amount === null || amount <= 0n) {
-      const text = "I could not read an amount to distribute. Tell me how much, e.g. 'pay out 0.01'.";
+    const parsed = extractAmount(message.content?.text ?? "", NATIVE_DECIMALS);
+    if (!parsed.ok) {
+      // Say why. An agent that just declines cannot ask a useful follow-up.
+      const text = `I did not distribute anything: ${parsed.reason}.`;
       await respond(callback, text);
-      return { success: false, text, error: "no amount in message" };
+      return { success: false, text, error: parsed.reason };
     }
+    const amount = parsed.amount;
 
     const report = await service.payContributors(amount);
 
