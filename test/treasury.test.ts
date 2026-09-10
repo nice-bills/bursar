@@ -241,3 +241,34 @@ describe("PolicyEngine", () => {
     });
   });
 });
+
+describe("PolicyEngine — assets it cannot yet measure", () => {
+  test("refuses ERC-20 movements rather than comparing them to a native cap", async () => {
+    // 1000 USDC is 1e9 base units, which would read as dust against a
+    // wei-denominated ceiling and slip through every limit.
+    const dir = await mkdtemp(join(tmpdir(), "bursar-token-"));
+    try {
+      const ledger = new Ledger(join(dir, "ledger.jsonl"));
+      const config = configSchema.parse({
+        treasury: { chainId: 11155111 },
+        contributors,
+        policy: { maxPerTransfer: "1000000000000000000", maxPerDay: "2000000000000000000" },
+      });
+
+      const decision = await new PolicyEngine(config, ledger).evaluate({
+        leg: "yield",
+        chainId: 11155111,
+        to: contributors[0]!.address,
+        amount: "1000000000",
+        token: `0x${"a".repeat(40)}`,
+        decimals: 6,
+        memo: "usdc",
+      });
+
+      assert.equal(decision.verdict, "deny");
+      assert.match((decision as { reason: string }).reason, /native asset only|per-asset/i);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

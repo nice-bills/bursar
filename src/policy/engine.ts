@@ -70,7 +70,24 @@ export class PolicyEngine {
       };
     }
 
-    // 2. Per-transfer ceiling.
+    // 2. One cap, one asset.
+    //
+    //    `maxPerTransfer` and `maxPerDay` are plain base-unit numbers with no
+    //    asset attached, so comparing them against a token with different
+    //    decimals is meaningless — 1000 USDC is 1e9 base units, which reads as
+    //    dust against a wei-denominated ceiling. Until the policy grows
+    //    per-asset limits, non-native movements are refused rather than
+    //    measured against the wrong yardstick.
+    if (movement.token !== null) {
+      return {
+        verdict: "deny",
+        reason:
+          `token ${movement.token} cannot be moved: spending limits are denominated in the ` +
+          `native asset only. Per-asset caps are needed before token legs can run.`,
+      };
+    }
+
+    // 3. Per-transfer ceiling.
     const maxPerTransfer = BigInt(this.config.policy.maxPerTransfer);
     if (amount > maxPerTransfer) {
       return {
@@ -79,7 +96,7 @@ export class PolicyEngine {
       };
     }
 
-    // 3. Rolling 24h aggregate. Counts in-flight movements too — treating an
+    // 4. Rolling 24h aggregate. Counts in-flight movements too — treating an
     //    unconfirmed transfer as "didn't happen" is how daily caps get breached.
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const movedToday = await this.ledger.movedSince(since, movement.token);
@@ -93,7 +110,7 @@ export class PolicyEngine {
       };
     }
 
-    // 4. Unreconciled history. If a previous movement is still open we do not
+    // 5. Unreconciled history. If a previous movement is still open we do not
     //    know the true balance, so committing more money is guesswork.
     const open = await this.ledger.openIntents();
     const blocking = open.filter((e) => e.chainId === movement.chainId);
@@ -106,7 +123,7 @@ export class PolicyEngine {
       };
     }
 
-    // 5. Human escalation threshold — last, so the reason returned is the most
+    // 6. Human escalation threshold — last, so the reason returned is the most
     //    actionable one rather than an approval prompt masking a hard failure.
     const threshold = this.config.policy.requireApprovalAbove;
     if (threshold !== undefined && amount > BigInt(threshold)) {

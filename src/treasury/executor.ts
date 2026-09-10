@@ -21,7 +21,34 @@ export type MoveOutcome =
   | { result: "skipped"; reason: string; intentId: string }
   | { result: "blocked"; reason: string; verdict: "deny" | "needs_approval" };
 
+/**
+ * Serialises the policy-check-then-record section.
+ *
+ * A daily cap is a serial invariant: two movements that each read the ledger
+ * before either writes will both see room under the cap and both proceed. That
+ * is a real double-spend, not a theoretical one — ElizaOS dispatches actions
+ * concurrently, so two payouts can be in flight at once.
+ *
+ * The whole of `move()` is held, not just the check, because the intent must be
+ * durable before the next caller evaluates policy. Payouts therefore execute
+ * one at a time. For a treasury that is the correct trade: throughput is worth
+ * nothing if the balance is wrong.
+ */
+class Mutex {
+  private tail: Promise<unknown> = Promise.resolve();
+
+  run<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(fn, fn);
+    // Keep the chain alive even when a caller rejects, or one failure would
+    // poison every movement that follows it.
+    this.tail = result.catch(() => undefined);
+    return result;
+  }
+}
+
 export class Executor {
+  private readonly mutex = new Mutex();
+
   constructor(
     private readonly client: KeeperHubClient,
     private readonly ledger: Ledger,
@@ -36,7 +63,11 @@ export class Executor {
    * the same amount in the same period are the same payment, and the second is
    * a no-op. Pass `nonce` when a genuine second payment is intended.
    */
-  async move(
+  move(movement: Movement, period: string, nonce?: string): Promise<MoveOutcome> {
+    return this.mutex.run(() => this.moveExclusive(movement, period, nonce));
+  }
+
+  private async moveExclusive(
     movement: Movement,
     period: string,
     nonce?: string,
@@ -160,7 +191,15 @@ export class Executor {
    * Either way the ledger ends up agreeing with the chain, which is the only
    * state from which it is safe to move more money.
    */
-  async reconcile(): Promise<{ resolved: number; stillOpen: number; details: string[] }> {
+  reconcile(): Promise<{ resolved: number; stillOpen: number; details: string[] }> {
+    return this.mutex.run(() => this.reconcileExclusive());
+  }
+
+  private async reconcileExclusive(): Promise<{
+    resolved: number;
+    stillOpen: number;
+    details: string[];
+  }> {
     const open = await this.ledger.openIntents();
     const details: string[] = [];
     let resolved = 0;

@@ -70,6 +70,14 @@ process that dies between "money left" and "we wrote it down".
   splits assign the division remainder deterministically, so no wei is lost.
 - **Policy answers only from config and ledger history**, never from the model.
   Allowlist, per-transfer ceiling, rolling 24h cap. Deny by default.
+- **Movements are serialised.** A daily cap is a serial invariant: ten payouts
+  fired at once will each read the ledger before any writes, all pass, and
+  breach the cap tenfold. ElizaOS dispatches actions concurrently, so this is
+  real. `Executor` holds a mutex across check-and-record; throughput is worth
+  nothing if the balance is wrong.
+- **Amounts are read strictly from natural language.** "pay the 3 contributors
+  0.01 each" must not become three ether. When more than one number could be
+  the amount, Bursar refuses and asks.
 
 ## KeeperHub surfaces used
 
@@ -119,7 +127,12 @@ Then, in an ElizaOS character:
 ```
 
 Scripts: `npm run demo` (dry) / `-- --execute`, `npm run chains`,
-`npm run workflow` (dry) / `-- --create`, `npm run smoke`.
+`npm run workflow` (dry) / `-- --create`, `npm run smoke`,
+`npm run chaos` (dry) / `-- --execute`.
+
+`npm run chaos` induces real failures — a torn ledger line, a crash before
+submitting, a crash after submitting — and asserts the recovery. The live
+scenarios prove reconciliation against the chain rather than asserting it.
 
 ## What we found in KeeperHub along the way
 
@@ -153,6 +166,11 @@ Stated plainly, since the submission form asks.
 - Contributor addresses in the committed config are placeholders.
 - `Executor.payoutChain()` prefers a private-mempool chain, but there is no
   fallback story if the treasury holds no funds there.
+- Spending limits are denominated in the native asset only. ERC-20 movements
+  are refused outright rather than measured against a cap that does not apply
+  to them, which is what blocks the yield leg today.
+- The mutex is per-process. Two processes sharing one ledger file could still
+  race; the service is a runtime singleton, so this holds for one agent.
 
 ## Layout
 
