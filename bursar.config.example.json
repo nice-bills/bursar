@@ -30,6 +30,7 @@
     {
       "$comment": "Keep 0.01 ETH of gas on Sepolia; top back up to 0.05 when it dips. Below the floor the agent risks stalling mid-task.",
       "chainId": 11155111,
+      "address": "0x4444444444444444444444444444444444444444",
       "minBalance": "10000000000000000",
       "targetBalance": "50000000000000000"
     }

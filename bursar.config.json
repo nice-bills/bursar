@@ -1,0 +1,31 @@
+{
+  "treasury": {
+    "chainId": 11155111,
+    "address": "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9"
+  },
+
+  "contributors": [
+    { "name": "model-provider", "address": "0x1111111111111111111111111111111111111111", "shareBps": 5000 },
+    { "name": "tool-author", "address": "0x2222222222222222222222222222222222222222", "shareBps": 3000 },
+    { "name": "host", "address": "0x3333333333333333333333333333333333333333", "shareBps": 2000 }
+  ],
+
+  "float": [
+    { "chainId": 11155111, "address": "0x4444444444444444444444444444444444444444", "minBalance": "10000000000000000", "targetBalance": "50000000000000000" }
+  ],
+
+  "yield": {
+    "enabled": false,
+    "protocol": "aave-v3",
+    "chainId": 8453,
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "buffer": "100000000"
+  },
+
+  "policy": {
+    "maxPerTransfer": "20000000000000000",
+    "maxPerDay": "100000000000000000",
+    "allowlist": [],
+    "requireApprovalAbove": "10000000000000000"
+  }
+}

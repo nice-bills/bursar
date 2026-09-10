@@ -1,75 +1,168 @@
 # Bursar
 
-**The autonomous CFO for AI agents. MCP in, KeeperHub out.**
+**An onchain treasury for ElizaOS agents. Execution by KeeperHub.**
 
-Agents can earn now. x402 and MPP let an agent charge for its work over HTTP and
-settle onchain. But earning is only half an economy — the other half is what the
-agent does with the money, and today that half is a human with a spreadsheet.
+An ElizaOS agent can hold a wallet and can earn. What it cannot do is run its
+own finances: split revenue among the people who built it, keep itself in gas so
+it does not stall mid-task, and prove afterwards where the money went. That work
+is done today by a human with a block explorer open.
 
-Bursar closes the loop. It is an MCP server that gives any agent a treasury:
-it collects what the agent earns, pays out what it owes, keeps its own gas
-topped up so it can keep working, and puts the surplus to work. Every leg
-executes onchain through KeeperHub.
+`plugin-bursar` gives the agent a treasury. Mount it in a character's plugin
+list and the agent gains a policy-bounded set of money movements, each one
+executed and audited through KeeperHub.
 
-## The money loop
+Built for the KeeperHub Agent Economy Hackathon. Integration target: **ElizaOS**.
 
-Four legs, each a real transaction:
+## Proof it works
 
-| Leg | What it does |
-| --- | --- |
-| **Sweep** | Collect x402/MPP earnings into the treasury wallet |
-| **Payout** | Split revenue to contributors by configured shares |
-| **Float** | Keep operational gas topped up per chain, so the agent never stalls |
-| **Yield** | Route surplus above the buffer into Aave V3 |
+Real transactions on Ethereum Sepolia, executed by the plugin's
+`PAY_CONTRIBUTORS` action distributing revenue 50/30/20:
 
-Plus **Report**: a P&L and audit trail assembled from KeeperHub run history, so
-you can answer "where did the money go" with transaction hashes.
+| Contributor | Share | Transaction |
+| --- | --- | --- |
+| model-provider | 50% | [`0xf044678e…`](https://sepolia.etherscan.io/tx/0xf044678e3d72c312d6bdba880b41a76fd012624b899077096e62204590342bbd) |
+| tool-author | 30% | [`0xd025aff1…`](https://sepolia.etherscan.io/tx/0xd025aff1846711621e015e07f19c7512b3fec9b2989fc7d195f6b4f809524281) |
+| host | 20% | [`0x65d50e85…`](https://sepolia.etherscan.io/tx/0x65d50e85c5277539fc01c6fa75a1d9bca5a992a4a65aa283837f455f128213ca) |
 
-## Why MCP in, KeeperHub out
+Reproduce with `npm run demo -- --execute`. Run it twice: the second run pays
+nobody, because every movement is idempotent by construction.
 
-Bursar is not bound to one agent framework. It speaks MCP, so ElizaOS,
-Daydreams, CrewAI, LangChain, and Claude Code all mount it the same way and
-inherit a treasury with no adapter code. Underneath, it speaks to KeeperHub for
-execution — gas estimation, private routing, retries, and the audit trail are
-KeeperHub's job, and reimplementing them would be the wrong kind of ambitious.
+## What the integration actually is
 
-The result: we didn't integrate with one project. We built something every
-agent project can mount.
+Not a generic wrapper. Three ElizaOS extension points, each chosen because it
+is the right one:
+
+**`BursarService`** extends their `Service`, so the runtime owns its lifecycle.
+That is load-bearing rather than decorative: the ledger's open-intent invariant
+holds only if there is exactly one writer per agent, and the runtime guarantees
+a single shared instance across every action and provider.
+
+**`treasuryProvider`** is the part a tool-only integration cannot do. Providers
+feed the agent's *perception* — their output is composed into the prompt before
+the model reasons. So a locked treasury is something the agent simply knows,
+the way it knows the time, instead of something it must call a tool to
+discover. An agent that is blocked stops promising payouts it cannot make.
+
+**Actions** — `PAY_CONTRIBUTORS`, `RECONCILE_TREASURY`, `TREASURY_REPORT` —
+with `validate()` gates that are real. `PAY_CONTRIBUTORS` refuses to be offered
+when the message names no amount, because guessing how much of a treasury to
+distribute is not a recoverable mistake.
 
 ## Reliability
 
-The interesting failures in a treasury are not "the swap reverted", they are
-"the payout half-completed and now the ledger disagrees with the chain". So:
+The interesting failure in a treasury is not a reverted transaction. It is a
+process that dies between "money left" and "we wrote it down".
 
-- **Idempotency keys are mandatory on every write.** The client refuses to send
-  a non-GET request without one, because a retried transfer is a double-spend.
-- **Retries are bounded and jittered**, honouring `Retry-After`, and only for
-  429/5xx/network — never for a 4xx that will fail identically.
-- **Rate limiting is client-side**, under KeeperHub's 60/min, so a multi-chain
-  sweep throttles itself instead of getting throttled.
-- **Execution polling survives the API's 60s wait cap** by re-issuing the
-  blocking wait until a terminal state or our own deadline.
-- **Response normalization is centralized**, so a schema change breaks one
-  function instead of leaking `any` through the codebase.
+- **Intent-first ledger.** Every movement is recorded *before* it is submitted.
+  A crash leaves a reconcilable record, not a gap.
+- **Reconciliation by idempotent replay.** Open intents are replayed under their
+  original idempotency key. Confirmed against the live API: a recognised key
+  returns the *original* execution flagged `idempotentReplay: true`, without
+  running a second transaction. So reconciliation asks the server what happened
+  instead of guessing — and if the movement never ran, it completes one that
+  policy already approved. Either way the ledger ends up agreeing with the chain.
+- **Unreconciled intents block everything.** If we do not know the true balance,
+  committing more money is guesswork, so the treasury locks until it is resolved.
+- **Writes without an idempotency key throw.** A retried transfer is a
+  double-spend; the client makes that impossible to express.
+- **Exact integer money math.** Base units as `bigint` everywhere internally,
+  converted to the API's decimal strings at exactly one boundary. Basis-point
+  splits assign the division remainder deterministically, so no wei is lost.
+- **Policy answers only from config and ledger history**, never from the model.
+  Allowlist, per-transfer ceiling, rolling 24h cap. Deny by default.
+
+## KeeperHub surfaces used
+
+| Surface | How |
+| --- | --- |
+| REST direct execution | `POST /execute/transfer` for every payout |
+| Idempotency | Server-side replay protection, verified end to end |
+| Agent-authored workflows | The gas float is composed by Bursar and authored onto KeeperHub ([`dg9oxiktaln5qv9hl5987`](https://app.keeperhub.com/workflows/dg9oxiktaln5qv9hl5987)) |
+| Audit trail | Execution ids and transaction hashes recorded per movement |
+| Private routing | Payouts prefer chains with MEV-protected submission |
+
+The gas float lives on KeeperHub's schedule rather than in our process on
+purpose: **an agent that has crashed cannot notice it has run out of gas.** A
+float that only tops up while the agent is healthy protects nothing.
+
+## The money loop
+
+| Leg | Status |
+| --- | --- |
+| **Payout** — split revenue to contributors by share | Working, onchain |
+| **Float** — keep the operating wallet in gas | Authored as a scheduled workflow |
+| **Report** — statement with a hash per line | Working |
+| **Sweep** — collect x402/MPP earnings | Not built |
+| **Yield** — surplus to Aave V3 | Config schema only |
 
 ## Setup
 
 ```bash
 npm install
-cp .env.example .env    # paste your kh_ key from app.keeperhub.com -> API Keys
-npm run smoke           # read-only: verifies auth, wallet, chains
+cp .env.example .env                       # your kh_ key from app.keeperhub.com
+cp bursar.config.example.json bursar.config.json
+npm run smoke                              # read-only: auth, wallet, chains
+npm test
 ```
 
-To prove execution end to end (this moves real value):
+Then, in an ElizaOS character:
 
-```bash
-npm run smoke -- --execute
+```jsonc
+{
+  "name": "MyAgent",
+  "plugins": ["plugin-bursar"],
+  "settings": {
+    "secrets": { "KEEPERHUB_API_KEY": "kh_..." },
+    "BURSAR_CONFIG_PATH": "bursar.config.json"
+  }
+}
 ```
 
-## Status
+Scripts: `npm run demo` (dry) / `-- --execute`, `npm run chains`,
+`npm run workflow` (dry) / `-- --create`, `npm run smoke`.
 
-Early. The client and the day-1 smoke path are in; the four workflow legs and
-the MCP surface are next. Response shapes from the KeeperHub API are typed
-loosely on purpose until the smoke test confirms them against a live org.
+## What we found in KeeperHub along the way
 
-Built for the KeeperHub Agent Economy Hackathon.
+Documented behaviour that differs from the live API, all confirmed by probing:
+
+1. Transfer takes `recipientAddress`, not `to`.
+2. `amount` is a **human-readable decimal string, not base units**. Sending
+   `"1000000000000"` for a 1e-6 ETH transfer is read as a trillion ETH — and
+   fails as a *spending cap* error, which reads like a permissions problem.
+3. Direct transfers complete synchronously and are not workflow executions;
+   `/workflows/executions/{id}/wait` returns 404 for them.
+4. Workflow creation is `POST /workflows/create`. `POST /workflows` is 405.
+5. Web3 node action types are slash-kebab (`web3/check-balance`,
+   `web3/transfer-funds`), not the documented `web3.getNativeBalance` /
+   `web3.transferNative`, which the validator rejects as unknown.
+6. `/execute` accepts only `transfer` and `contract-call` — there is no balance
+   endpoint, so balance-gated logic must live in a workflow.
+
+The workflow validator is genuinely good: it reports every invalid node at once
+with `path`, `expected`, and `received`, which made the above discoverable.
+
+## Known gaps
+
+Stated plainly, since the submission form asks.
+
+- Sweep and yield legs are not implemented; the config schema anticipates them.
+- Testnet only so far. Nothing is chain-specific about the code, but the mainnet
+  path has not been exercised.
+- The gas-float workflow is authored and scheduled but has not yet fired a
+  top-up, because the demo wallet has not dipped below its floor.
+- Contributor addresses in the committed config are placeholders.
+- `Executor.payoutChain()` prefers a private-mempool chain, but there is no
+  fallback story if the treasury holds no funds there.
+
+## Layout
+
+```
+src/
+  index.ts              Plugin manifest
+  eliza/                Service, provider, actions, standalone runtime
+  treasury/             Executor (the one path value moves through), workflows
+  policy/               Deny-by-default policy engine
+  ledger/               Append-only intent ledger
+  keeperhub/            Typed REST client: retries, rate limits, idempotency
+  units.ts              Base units <-> decimal, the one conversion boundary
+```

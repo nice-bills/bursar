@@ -13,7 +13,9 @@
     "smoke": "tsx scripts/smoke.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "chains": "tsx scripts/chains.ts",
-    "test": "node --import tsx --test test/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts",
+    "demo": "tsx scripts/demo.ts",
+    "workflow": "tsx scripts/workflow.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

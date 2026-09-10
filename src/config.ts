@@ -41,6 +41,8 @@ const contributorSchema = z.object({
 
 const floatSchema = z.object({
   chainId: z.number().int().positive(),
+  /** The wallet the agent spends gas from — what we keep above the floor. */
+  address,
   /** Below this native balance, the agent risks stalling mid-task. */
   minBalance: baseUnits,
   /** Top back up to this level when the floor is breached. */

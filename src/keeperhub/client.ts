@@ -164,8 +164,22 @@ export class KeeperHubClient {
 
   // --- Workflows ----------------------------------------------------------
 
+  /**
+   * Create a workflow.
+   *
+   * The route is /workflows/create, not POST /workflows — the collection URL
+   * advertises only GET, HEAD, OPTIONS and answers 405 to a POST.
+   */
   createWorkflow(workflow: unknown, idempotencyKey: string): Promise<unknown> {
-    return this.request("POST", "/workflows", { body: workflow, idempotencyKey });
+    return this.request("POST", "/workflows/create", { body: workflow, idempotencyKey });
+  }
+
+  listWorkflows(): Promise<unknown> {
+    return this.request("GET", "/workflows");
+  }
+
+  deleteWorkflow(workflowId: string, idempotencyKey: string): Promise<unknown> {
+    return this.request("DELETE", `/workflows/${workflowId}`, { idempotencyKey });
   }
 
   async executeWorkflow(
