@@ -17,6 +17,7 @@ import { Ledger, dailyPeriod, type LedgerEntry } from "../ledger/store.js";
 import { PolicyEngine } from "../policy/engine.js";
 import { Executor, type MoveOutcome } from "../treasury/executor.js";
 import { formatUnits, NATIVE_DECIMALS } from "../units.js";
+import { floatMonitorWorkflow, readBalanceOutput } from "../treasury/workflows.js";
 
 /** Settings arrive loosely typed; every value we read is a string or absent. */
 function setting(runtime: IAgentRuntime, key: string): string | undefined {
@@ -24,6 +25,16 @@ function setting(runtime: IAgentRuntime, key: string): string | undefined {
   return value === undefined || value === null ? undefined : String(value);
 }
 
+
+export interface FloatReport {
+  chainId: number;
+  address: string;
+  /** Decimal string, or null when the reading failed. */
+  balance: string | null;
+  /** Decimal string when a top-up was attempted. */
+  topUp: string | null;
+  note: string;
+}
 
 export interface PayoutReport {
   total: string;
@@ -127,6 +138,98 @@ export class BursarService extends Service {
     }
 
     return { total: revenueBaseUnits.toString(), outcomes };
+  }
+
+  /**
+   * Keep the operating wallet above its floor.
+   *
+   * The balance comes from the agent-authored monitor workflow rather than a
+   * local RPC call: it is the same reading KeeperHub's scheduler takes, so the
+   * decision cannot disagree with the platform's own view.
+   *
+   * The top-up amount is `target - min`, fixed from config rather than derived
+   * from the reading. A top-up computed from the balance it is about to change
+   * can chase its own effect; a fixed amount cannot.
+   */
+  async checkFloat(period = dailyPeriod()): Promise<FloatReport[]> {
+    const reports: FloatReport[] = [];
+
+    for (const float of this.treasuryCfg.float) {
+      const workflow = floatMonitorWorkflow(float);
+      const workflowId = await this.ensureWorkflow(workflow.name, workflow);
+
+      const run = await this.client.executeWorkflow(workflowId, {}, `float-${workflowId}-${Date.now()}`);
+      const final = await this.client.awaitExecution(run.executionId);
+      const reading = readBalanceOutput(final.output);
+
+      if (!reading) {
+        reports.push({
+          chainId: float.chainId,
+          address: float.address,
+          balance: null,
+          topUp: null,
+          note: `could not read balance (execution ${final.status})`,
+        });
+        continue;
+      }
+
+      const balance = BigInt(reading.balanceWei);
+      const floor = BigInt(float.minBalance);
+
+      if (balance >= floor) {
+        reports.push({
+          chainId: float.chainId,
+          address: float.address,
+          balance: reading.balance,
+          topUp: null,
+          note: `above the ${formatUnits(floor, NATIVE_DECIMALS)} floor; nothing to do`,
+        });
+        continue;
+      }
+
+      const amount = (BigInt(float.targetBalance) - floor).toString();
+      const outcome = await this.executor.move(
+        {
+          leg: "float",
+          chainId: float.chainId,
+          to: float.address,
+          amount,
+          token: null,
+          decimals: NATIVE_DECIMALS,
+          memo: `gas top-up: balance ${reading.balance} below floor`,
+        },
+        period,
+      );
+
+      reports.push({
+        chainId: float.chainId,
+        address: float.address,
+        balance: reading.balance,
+        topUp: formatUnits(BigInt(amount), NATIVE_DECIMALS),
+        note:
+          outcome.result === "confirmed"
+            ? `topped up — ${outcome.transactionHashes[0] ?? ""}`
+            : outcome.result === "blocked"
+              ? `top-up blocked: ${outcome.reason}`
+              : `top-up ${outcome.result}`,
+      });
+    }
+
+    return reports;
+  }
+
+  /** Author the workflow if absent, update it if present. Never duplicates. */
+  private async ensureWorkflow(name: string, workflow: unknown): Promise<string> {
+    const existing = await this.client.listWorkflows();
+    const rows = (Array.isArray(existing) ? existing : []) as Array<{ id: string; name: string }>;
+    const found = rows.find((r) => r.name === name);
+
+    if (found) {
+      await this.client.updateWorkflow(found.id, workflow, `wf-${found.id}`);
+      return found.id;
+    }
+    const created = await this.client.createWorkflow(workflow, `wf-${name}`);
+    return String((created as { id?: string })?.id ?? "");
   }
 
   /** Resolve every open intent against the chain. See Executor.reconcile. */

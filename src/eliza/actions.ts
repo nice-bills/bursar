@@ -248,8 +248,67 @@ export const treasuryReportAction: Action = {
   ],
 };
 
+export const checkFloatAction: Action = {
+  name: "CHECK_GAS_FLOAT",
+  similes: ["TOP_UP_GAS", "CHECK_GAS", "REFILL_GAS", "AM_I_RUNNING_OUT_OF_GAS"],
+  description:
+    "Read the agent's operating balance through its KeeperHub monitor workflow and top it " +
+    "up from the treasury if it has fallen below the configured floor. Use when asked about " +
+    "gas, whether the agent can keep working, or to refill the operating wallet.",
+
+  validate: async (runtime: IAgentRuntime): Promise<boolean> => {
+    const service = getService(runtime);
+    // Pointless to offer when no float target is configured.
+    return service !== undefined && service.treasuryConfig.float.length > 0;
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    _message: Memory,
+    _state?: State,
+    _options?: unknown,
+    callback?: HandlerCallback,
+  ): Promise<ActionResult> => {
+    const service = getService(runtime);
+    if (!service) {
+      return { success: false, error: "Bursar treasury service is not running." };
+    }
+
+    const reports = await service.checkFloat();
+    const lines = reports.map(
+      (r) =>
+        `  chain ${r.chainId} ${r.address}: ` +
+        `${r.balance === null ? "balance unknown" : `${r.balance} native`}` +
+        `${r.topUp ? `, topped up by ${r.topUp}` : ""} — ${r.note}`,
+    );
+
+    const text = ["Gas float check:", ...lines].join("\n");
+    await respond(callback, text);
+
+    return {
+      success: reports.every((r) => r.balance !== null),
+      text,
+      data: { reports },
+    };
+  },
+
+  examples: [
+    [
+      { name: "{{user1}}", content: { text: "are you going to run out of gas?" } },
+      {
+        name: "{{agent}}",
+        content: {
+          text: "Checking my operating balance through the KeeperHub monitor.",
+          actions: ["CHECK_GAS_FLOAT"],
+        },
+      },
+    ],
+  ],
+};
+
 export const treasuryActions: Action[] = [
   payContributorsAction,
+  checkFloatAction,
   reconcileTreasuryAction,
   treasuryReportAction,
 ];

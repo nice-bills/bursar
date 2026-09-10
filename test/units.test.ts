@@ -86,3 +86,23 @@ describe("decimals validation", () => {
     assert.throws(() => parseUnits("1", 99), UnitsError);
   });
 });
+
+describe("idempotency keys survive real-world strings", () => {
+  test("a key with a non-ASCII character does not break fetch", async () => {
+    // Regression: workflow names contain an em-dash, and header values must be
+    // Latin-1, so `fetch` threw before the key was sanitised.
+    const { KeeperHubClient } = await import("../src/keeperhub/client.js");
+    const client = new KeeperHubClient({ apiKey: "kh_test", baseUrl: "http://127.0.0.1:1" });
+
+    // The request will fail to connect; what matters is that it fails as a
+    // network error rather than a ByteString conversion TypeError.
+    await assert.rejects(
+      () => client.createWorkflow({}, "wf-Bursar Float Monitor — chain 11155111"),
+      (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        assert.ok(!/ByteString/.test(message), `header conversion failed: ${message}`);
+        return true;
+      },
+    );
+  });
+});

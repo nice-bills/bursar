@@ -12,7 +12,7 @@
 import "dotenv/config";
 
 import bursarPlugin, { BursarService } from "../src/index.js";
-import { payContributorsAction, reconcileTreasuryAction, treasuryReportAction } from "../src/eliza/actions.js";
+import { payContributorsAction, checkFloatAction, reconcileTreasuryAction, treasuryReportAction } from "../src/eliza/actions.js";
 import { treasuryProvider } from "../src/eliza/provider.js";
 import { createStandaloneRuntime, userMessage, emptyState } from "../src/eliza/standalone.js";
 import { formatUnits, NATIVE_DECIMALS } from "../src/units.js";
@@ -76,13 +76,19 @@ async function main(): Promise<void> {
   console.log(`\n   success: ${(result as { success?: boolean })?.success}`);
 
   // --- Accounting ----------------------------------------------------------
-  banner("5. TREASURY_REPORT — where the money went");
+  banner("5. CHECK_GAS_FLOAT — reading balance via the agent-authored workflow");
+  await checkFloatAction.handler(runtime, userMessage("are you low on gas?"), emptyState(), undefined, async (content) => {
+    for (const line of String(content.text ?? "").split("\n")) console.log(`   ${line}`);
+    return [];
+  });
+
+  banner("6. TREASURY_REPORT — where the money went");
   await treasuryReportAction.handler(runtime, userMessage("where did the money go?"), emptyState(), undefined, async (content) => {
     for (const line of String(content.text ?? "").split("\n")) console.log(`   ${line}`);
     return [];
   });
 
-  banner("6. RECONCILE_TREASURY — proving the ledger agrees with the chain");
+  banner("7. RECONCILE_TREASURY — proving the ledger agrees with the chain");
   await reconcileTreasuryAction.handler(runtime, userMessage("did those go through?"), emptyState(), undefined, async (content) => {
     for (const line of String(content.text ?? "").split("\n")) console.log(`   ${line}`);
     return [];

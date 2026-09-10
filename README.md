@@ -93,20 +93,24 @@ process that dies between "money left" and "we wrote it down".
 | --- | --- |
 | REST direct execution | `POST /execute/transfer` for every payout |
 | Idempotency | Server-side replay protection, verified end to end |
-| Agent-authored workflows | The gas float is composed by Bursar and authored onto KeeperHub ([`dg9oxiktaln5qv9hl5987`](https://app.keeperhub.com/workflows/dg9oxiktaln5qv9hl5987)) |
+| Agent-authored workflows | Bursar composes and upserts a float monitor onto KeeperHub, then executes it and reads its output ([`dg9oxiktaln5qv9hl5987`](https://app.keeperhub.com/workflows/dg9oxiktaln5qv9hl5987)) |
 | Audit trail | Execution ids and transaction hashes recorded per movement |
 | Private routing | Payouts prefer chains with MEV-protected submission |
 
-The gas float lives on KeeperHub's schedule rather than in our process on
-purpose: **an agent that has crashed cannot notice it has run out of gas.** A
-float that only tops up while the agent is healthy protects nothing.
+The float was meant to be a self-contained keeper on KeeperHub's schedule —
+**an agent that has crashed cannot notice it has run out of gas.** The balance
+half runs green; the comparison does not, because a Condition node cannot read
+a `web3/check-balance` node's output (see below). So Bursar executes the
+monitor workflow and decides in-process. That costs the crash-resilience, but
+buys something back: the top-up now passes through the policy engine, the
+ledger, and idempotency, which a pure workflow would have bypassed.
 
 ## The money loop
 
 | Leg | Status |
 | --- | --- |
 | **Payout** — split revenue to contributors by share | Working, onchain |
-| **Float** — keep the operating wallet in gas | Authored as a scheduled workflow |
+| **Float** — keep the operating wallet in gas | Working; balance read via workflow, decision in-process |
 | **Report** — statement with a hash per line | Working |
 | **Sweep** — collect x402/MPP earnings | Not built |
 | **Yield** — surplus to Aave V3 | Config schema only |
@@ -158,6 +162,20 @@ Documented behaviour that differs from the live API, all confirmed by probing:
    `web3.transferNative`, which the validator rejects as unknown.
 6. `/execute` accepts only `transfer` and `contract-call` — there is no balance
    endpoint, so balance-gated logic must live in a workflow.
+7. Workflows are updated with `PATCH`; `PUT` and `POST` both answer 405. A
+   workflow that has ever run cannot be deleted until its executions are, so
+   re-authoring must upsert rather than replace.
+8. **A Condition node cannot read a `web3/check-balance` node's output.** Every
+   reference form fails identically in freshly created workflows:
+   `{{@step-1:Bal.balanceWei}}`, `{{step-1.balanceWei}}`,
+   `{{@step-1:Bal.balance}}` — *"Unresolved template reference(s) … resolver
+   did not match."* The field is real (executing the balance node alone returns
+   `{ address, balance, balanceWei, addressLink, success }`) and the `@` form is
+   what KeeperHub's own Aave template uses, so core web3 node outputs appear not
+   to be registered with the template resolver. This is the one finding that
+   changed our architecture.
+9. `PATCH` followed immediately by `execute` can run the *previous* definition.
+   Worth knowing before concluding a fix did not work — it cost us an hour.
 
 The workflow validator is genuinely good: it reports every invalid node at once
 with `path`, `expected`, and `received`, which made the above discoverable.
@@ -169,9 +187,11 @@ Stated plainly, since the submission form asks.
 - Sweep and yield legs are not implemented; the config schema anticipates them.
 - Testnet only so far. Nothing is chain-specific about the code, but the mainnet
   path has not been exercised.
-- The gas-float workflow is authored and scheduled but has not yet fired a
-  top-up, because the demo wallet has not dipped below its floor.
-- Contributor addresses in the committed config are placeholders.
+- The float has never actually *topped up*, because the wallet has stayed above
+  its floor. The path is exercised end to end; only the transfer branch is
+  unproven.
+- The float decision runs in-process, so it does not survive the agent being
+  down — see the resolver limitation above.
 - `Executor.payoutChain()` prefers a private-mempool chain, but there is no
   fallback story if the treasury holds no funds there.
 - Spending limits are denominated in the native asset only. ERC-20 movements

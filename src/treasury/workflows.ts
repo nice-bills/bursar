@@ -1,14 +1,33 @@
 /**
  * Agent-authored workflows.
  *
- * The gas float is the one leg that does not belong in our process. An agent
- * that has crashed cannot notice it has run out of gas, and a treasury that
- * only tops up while the agent is healthy protects nothing. So the float lives
- * on KeeperHub's schedule instead: it keeps running when the agent does not.
+ * Bursar composes these; KeeperHub stores, schedules, and executes them. Node
+ * shapes mirror workflows read back from the live API rather than the
+ * documented examples, which differ in places.
  *
- * This composes the workflow JSON; KeeperHub stores, schedules, and executes
- * it. Node shapes here mirror workflows read back from the live API rather
- * than the documented examples, which differ in places.
+ * ## Why the float is split across two systems
+ *
+ * The intent was a self-contained keeper: read balance, compare to a floor,
+ * top up — all on KeeperHub's schedule, so it keeps working when the agent is
+ * down. The balance half runs green. The comparison does not: a Condition node
+ * cannot read a `web3/check-balance` node's output.
+ *
+ * Every reference form fails identically, in freshly created workflows:
+ *
+ *   {{@step-1:Bal.balanceWei}}   {{step-1.balanceWei}}   {{@step-1:Bal.balance}}
+ *
+ *   "Unresolved template reference(s) ... resolver did not match."
+ *
+ * The field is real — executing the balance node alone returns
+ * `{ address, balance, balanceWei, addressLink, success }` — and the `@form`
+ * matches what KeeperHub's own Aave template uses. So core web3 node outputs
+ * appear not to be registered with the template resolver.
+ *
+ * Until that is resolved upstream, the workflow below is the half that works:
+ * a scheduled balance reading. `BursarService.checkFloat()` consumes its
+ * output and decides in-process, which also means the top-up inherits the
+ * policy engine, the ledger, and idempotency — protections a pure workflow
+ * would not have had.
  */
 
 import type { FloatTarget } from "../config.js";
@@ -67,23 +86,19 @@ export interface WorkflowDefinition {
  * provide — and it means the same run twice cannot drain the treasury by
  * reacting to its own effect.
  */
-export function gasFloatWorkflow(
+export function floatMonitorWorkflow(
   float: FloatTarget & { address: string },
   cron = "0 * * * *",
 ): WorkflowDefinition {
   const network = String(float.chainId);
   const floorLabel = formatUnits(BigInt(float.minBalance), NATIVE_DECIMALS);
-  const topUp = (BigInt(float.targetBalance) - BigInt(float.minBalance)).toString();
-  const topUpLabel = formatUnits(BigInt(topUp), NATIVE_DECIMALS);
-
-  const balanceLabel = "Read Operating Balance";
 
   return {
-    name: `Bursar Gas Float — chain ${float.chainId}`,
+    name: `Bursar Float Monitor — chain ${float.chainId}`,
     description:
-      `Keep the agent's operating wallet above ${floorLabel} native on chain ${float.chainId}. ` +
-      `When it dips below, send ${topUpLabel} from the treasury so the agent does not stall ` +
-      `mid-task. Authored by plugin-bursar.`,
+      `Read the agent's operating balance on chain ${float.chainId} every hour. ` +
+      `Bursar compares it against the ${floorLabel} floor and tops up when needed. ` +
+      `Authored by plugin-bursar.`,
 
     nodes: [
       {
@@ -102,7 +117,7 @@ export function gasFloatWorkflow(
         type: "action",
         data: {
           type: "action",
-          label: balanceLabel,
+          label: "Read Operating Balance",
           config: {
             actionType: WEB3.checkBalance,
             network,
@@ -113,59 +128,31 @@ export function gasFloatWorkflow(
         },
         position: { x: 252, y: 116 },
       },
-      {
-        id: "step-2",
-        type: "action",
-        data: {
-          type: "action",
-          label: "Below Floor?",
-          config: {
-            actionType: "Condition",
-            condition: `{{@step-1:${balanceLabel}.balance.balance}} < ${float.minBalance}`,
-            group: {
-              id: "group-1",
-              logic: "AND",
-              rules: [
-                {
-                  id: "rule-1",
-                  operator: "<",
-                  leftOperand: `{{@step-1:${balanceLabel}.balance.balance}}`,
-                  rightOperand: float.minBalance,
-                },
-              ],
-            },
-          },
-          status: "idle",
-          description: `Gate: only top up when below ${floorLabel}`,
-        },
-        position: { x: 504, y: 116 },
-      },
-      {
-        id: "step-3",
-        type: "action",
-        data: {
-          type: "action",
-          label: "Top Up Gas",
-          config: {
-            actionType: WEB3.transferFunds,
-            network,
-            // `recipientAddress`, matching the direct-execution API — not
-            // `recipient`, which the validator rejects as an unknown field.
-            recipientAddress: float.address,
-            // Decimal string, matching the direct-execution API's convention.
-            amount: topUpLabel,
-          },
-          status: "idle",
-          description: `Send ${topUpLabel} from the treasury to the operating wallet`,
-        },
-        position: { x: 756, y: 116 },
-      },
     ],
 
-    edges: [
-      { id: "e1", source: "trigger-1", target: "step-1" },
-      { id: "e2", source: "step-1", target: "step-2" },
-      { id: "e3", source: "step-2", target: "step-3" },
-    ],
+    edges: [{ id: "e1", source: "trigger-1", target: "step-1" }],
+  };
+}
+
+/** Output shape of a `web3/check-balance` node, confirmed by execution. */
+export interface BalanceReading {
+  address: string;
+  /** Decimal string, e.g. "0.4999926". */
+  balance: string;
+  /** Base units — use this for comparisons. */
+  balanceWei: string;
+  addressLink?: string;
+  success: boolean;
+}
+
+export function readBalanceOutput(output: unknown): BalanceReading | null {
+  const o = output as Record<string, unknown> | null;
+  if (!o || typeof o.balanceWei !== "string") return null;
+  return {
+    address: String(o.address ?? ""),
+    balance: String(o.balance ?? ""),
+    balanceWei: o.balanceWei,
+    addressLink: typeof o.addressLink === "string" ? o.addressLink : undefined,
+    success: Boolean(o.success),
   };
 }

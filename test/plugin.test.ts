@@ -9,7 +9,7 @@ import { BursarService } from "../src/eliza/service.js";
 import { treasuryProvider } from "../src/eliza/provider.js";
 import { payContributorsAction, reconcileTreasuryAction } from "../src/eliza/actions.js";
 import { createStandaloneRuntime, userMessage, emptyState } from "../src/eliza/standalone.js";
-import { gasFloatWorkflow } from "../src/treasury/workflows.js";
+import { floatMonitorWorkflow, readBalanceOutput } from "../src/treasury/workflows.js";
 
 const CONFIG = {
   treasury: { chainId: 11155111, address: `0x${"8".repeat(40)}` },
@@ -58,7 +58,7 @@ describe("plugin manifest", () => {
     assert.ok(bursarPlugin.description.length > 0);
     assert.deepEqual(bursarPlugin.services, [BursarService]);
     assert.deepEqual(bursarPlugin.providers, [treasuryProvider]);
-    assert.equal(bursarPlugin.actions?.length, 3);
+    assert.equal(bursarPlugin.actions?.length, 4);
   });
 
   test("every action has a description, validate, and handler", () => {
@@ -168,45 +168,66 @@ describe("action gating", () => {
   });
 });
 
-describe("gas float workflow", () => {
+describe("float monitor workflow", () => {
   const float = CONFIG.float[0]!;
 
-  test("uses the action types the platform validator actually accepts", () => {
-    const wf = gasFloatWorkflow(float);
+  test("uses the action type the platform validator actually accepts", () => {
+    const wf = floatMonitorWorkflow(float);
     const types = wf.nodes.map((n) => n.data.config.actionType).filter(Boolean);
     assert.ok(types.includes("web3/check-balance"));
-    assert.ok(types.includes("web3/transfer-funds"));
-    // The documented names are rejected as unknown action types.
+    // The documented name is rejected as an unknown action type.
     assert.ok(!types.includes("web3.getNativeBalance"));
   });
 
-  test("uses recipientAddress, the field name the validator requires", () => {
-    const wf = gasFloatWorkflow(float);
-    const transfer = wf.nodes.find((n) => n.data.config.actionType === "web3/transfer-funds");
-    assert.ok(transfer?.data.config.recipientAddress, "must use recipientAddress");
-    assert.equal(transfer?.data.config.recipient, undefined, "`recipient` is rejected");
+  test("reads the wallet the agent actually spends gas from", () => {
+    const wf = floatMonitorWorkflow(float);
+    const node = wf.nodes.find((n) => n.data.config.actionType === "web3/check-balance");
+    assert.equal(node?.data.config.address, float.address);
+    assert.equal(node?.data.config.network, String(float.chainId));
   });
 
-  test("tops up by a fixed amount, so a run cannot react to its own effect", () => {
-    const wf = gasFloatWorkflow(float);
-    const transfer = wf.nodes.find((n) => n.data.config.actionType === "web3/transfer-funds");
-    // target - min = 0.05 - 0.01 = 0.04, decided at authoring time.
-    assert.equal(transfer?.data.config.amount, "0.04");
+  test("carries no transfer node, so the workflow itself can never move value", () => {
+    // The comparison cannot run on-platform (a Condition node cannot read a
+    // web3/check-balance output), so the decision lives in checkFloat().
+    // A transfer node here would fire unconditionally.
+    const wf = floatMonitorWorkflow(float);
+    const types = wf.nodes.map((n) => n.data.config.actionType);
+    assert.ok(!types.includes("web3/transfer-funds"), "monitor must be read-only");
   });
 
-  test("gates the transfer behind a condition on the measured balance", () => {
-    const wf = gasFloatWorkflow(float);
-    const condition = wf.nodes.find((n) => n.data.config.actionType === "Condition");
-    assert.ok(condition, "a top-up must never run unconditionally");
-    assert.match(String(condition?.data.config.condition), /step-1/);
-  });
-
-  test("wires every node into a connected path", () => {
-    const wf = gasFloatWorkflow(float);
+  test("is a connected graph", () => {
+    const wf = floatMonitorWorkflow(float);
     const targets = new Set(wf.edges.map((e) => e.target));
     for (const node of wf.nodes) {
       if (node.type === "trigger") continue;
       assert.ok(targets.has(node.id), `node ${node.id} is orphaned`);
     }
+  });
+
+  test("names itself stably, so re-authoring updates instead of duplicating", () => {
+    assert.equal(floatMonitorWorkflow(float).name, floatMonitorWorkflow(float).name);
+    assert.match(floatMonitorWorkflow(float).name, /^Bursar /);
+  });
+});
+
+describe("readBalanceOutput", () => {
+  test("parses a real check-balance payload", () => {
+    const reading = readBalanceOutput({
+      address: "0xabc",
+      balance: "0.4999926",
+      balanceWei: "499992600000000000",
+      addressLink: "https://sepolia.etherscan.io/address/0xabc",
+      success: true,
+    });
+    assert.equal(reading?.balanceWei, "499992600000000000");
+    assert.equal(reading?.balance, "0.4999926");
+  });
+
+  test("returns null rather than a half-built reading when the shape is wrong", () => {
+    // A malformed reading must not be mistaken for a zero balance, which would
+    // trigger a top-up that is not needed.
+    assert.equal(readBalanceOutput(null), null);
+    assert.equal(readBalanceOutput({ balance: "1.0" }), null);
+    assert.equal(readBalanceOutput({ balanceWei: 123 }), null);
   });
 });

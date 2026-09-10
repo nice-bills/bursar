@@ -7,6 +7,8 @@
  * surprise fails in one place instead of ten.
  */
 
+import { createHash } from "node:crypto";
+
 const DEFAULT_BASE_URL = "https://app.keeperhub.com/api";
 
 /** Documented limit is 60 requests/minute per API key. Stay under it. */
@@ -178,6 +180,25 @@ export class KeeperHubClient {
     return this.request("GET", "/workflows");
   }
 
+  /**
+   * Update a workflow in place. PATCH is the only mutating verb the resource
+   * accepts; PUT and POST both answer 405.
+   *
+   * Re-authoring updates rather than deleting and recreating on purpose: a
+   * workflow that has ever run cannot be deleted without first destroying its
+   * executions, and that history is the audit trail.
+   */
+  updateWorkflow(
+    workflowId: string,
+    workflow: unknown,
+    idempotencyKey: string,
+  ): Promise<unknown> {
+    return this.request("PATCH", `/workflows/${workflowId}`, {
+      body: workflow,
+      idempotencyKey,
+    });
+  }
+
   deleteWorkflow(workflowId: string, idempotencyKey: string): Promise<unknown> {
     return this.request("DELETE", `/workflows/${workflowId}`, { idempotencyKey });
   }
@@ -255,7 +276,9 @@ export class KeeperHubClient {
           Accept: "application/json",
         };
         if (opts.body !== undefined) headers["Content-Type"] = "application/json";
-        if (opts.idempotencyKey) headers["Idempotency-Key"] = opts.idempotencyKey;
+        if (opts.idempotencyKey) {
+          headers["Idempotency-Key"] = safeHeaderValue(opts.idempotencyKey);
+        }
 
         const response = await fetch(url, {
           method,
@@ -353,6 +376,20 @@ function normalizeExecution(body: unknown): ExecutionResult {
     output: inner.output ?? raw.output ?? null,
     raw,
   };
+}
+
+/**
+ * HTTP header values must be Latin-1, but idempotency keys are derived from
+ * real data — workflow names, memos, contributor names — which may contain any
+ * character. An em-dash in a workflow name is enough to make `fetch` throw.
+ *
+ * Non-ASCII keys are replaced by a hash of themselves. That keeps the property
+ * that actually matters: the same logical request produces the same key, so
+ * server-side replay protection still works.
+ */
+function safeHeaderValue(key: string): string {
+  if (/^[\x20-\x7E]+$/.test(key) && key.length <= 200) return key;
+  return `bursar-${createHash("sha256").update(key).digest("hex").slice(0, 40)}`;
 }
 
 function safeJsonParse(text: string): unknown {
