@@ -119,6 +119,15 @@ describe("treasury provider", () => {
     });
   });
 
+  test("is included in default state composition", () => {
+    // Regression, found by booting a real AgentRuntime: composeState filters on
+    // `!p.private && !p.dynamic`. Marking this provider dynamic silently
+    // removed treasury state from the agent's context — the agent stopped
+    // knowing it was solvent, which is the entire reason the provider exists.
+    assert.notEqual(treasuryProvider.dynamic, true, "a dynamic provider is opt-in only");
+    assert.notEqual(treasuryProvider.private, true, "a private provider is opt-in only");
+  });
+
   test("degrades instead of throwing when the service is absent", async () => {
     const ctx = createStandaloneRuntime({ settings: {} });
     const result = await treasuryProvider.get(ctx.runtime, userMessage("hi"), emptyState());

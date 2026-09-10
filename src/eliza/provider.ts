@@ -24,9 +24,11 @@ export const treasuryProvider: Provider = {
     "The agent's own treasury: configured revenue splits, recent payouts, and whether " +
     "any movement is unreconciled and therefore blocking further spending.",
 
-  // Balances and open intents change as the agent acts, so this must be
-  // recomputed per message rather than cached into the character.
-  dynamic: true,
+  // NOT `dynamic`. That flag does not mean "recompute each time" — providers
+  // are always called fresh. It means "only include when explicitly named",
+  // and composeState filters on `!p.private && !p.dynamic`. Marking this
+  // dynamic silently removed treasury state from the agent's context, which is
+  // the whole point of the provider.
 
   async get(runtime: IAgentRuntime, _message: Memory, _state: State): Promise<ProviderResult> {
     const service = runtime.getService<BursarService>(BursarService.serviceType) ?? undefined;

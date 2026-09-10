@@ -51,6 +51,15 @@ the model reasons. So a locked treasury is something the agent simply knows,
 the way it knows the time, instead of something it must call a tool to
 discover. An agent that is blocked stops promising payouts it cannot make.
 
+Verified in a real runtime, not assumed. `npm run agent` boots an actual
+`ElizaOS` orchestrator with a pglite database and asserts that the provider's
+text lands in `composeState` output, that the runtime resolves the service, and
+that `processActions` dispatches the action. That harness immediately caught a
+bug the standalone tests could not: the provider was marked `dynamic: true`,
+and `composeState` filters on `!p.private && !p.dynamic`, so treasury state was
+silently absent from every prompt. `dynamic` does not mean "recompute each
+time" — providers are always called fresh — it means "opt-in only".
+
 **Actions** — `PAY_CONTRIBUTORS`, `RECONCILE_TREASURY`, `TREASURY_REPORT` —
 with `validate()` gates that are real. `PAY_CONTRIBUTORS` refuses to be offered
 when the message names no amount, because guessing how much of a treasury to
@@ -138,7 +147,7 @@ Then, in an ElizaOS character:
 }
 ```
 
-Scripts: `npm run demo` (dry) / `-- --execute`, `npm run chains`,
+Scripts: `npm run agent` (dry) / `-- --execute`, `npm run demo` (dry) / `-- --execute`, `npm run chains`,
 `npm run workflow` (dry) / `-- --create`, `npm run smoke`,
 `npm run chaos` (dry) / `-- --execute`.
 
@@ -176,6 +185,17 @@ Documented behaviour that differs from the live API, all confirmed by probing:
    changed our architecture.
 9. `PATCH` followed immediately by `execute` can run the *previous* definition.
    Worth knowing before concluding a fix did not work — it cost us an hour.
+
+And in ElizaOS itself, from booting it:
+
+10. `AgentRuntime.initialize()` queries the `agents` table *before* running
+    plugin migrations, so it cannot start against a brand-new database. Migrate
+    first and pass the adapter in.
+11. The database adapter's agent id must match the runtime's (derived from the
+    character name), or writes fail on a foreign key violation.
+12. `registerService()` is called without being awaited, so services start
+    asynchronously after plugin registration returns and there is no public
+    "ready" signal. Poll for the service rather than racing it.
 
 The workflow validator is genuinely good: it reports every invalid node at once
 with `path`, `expected`, and `received`, which made the above discoverable.
