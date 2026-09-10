@@ -1,0 +1,54 @@
+{
+  "$comment": "Copy to bursar.config.json and edit. Amounts are ALWAYS base units as strings (wei for native ETH, 1e6 for USDC). Never floats.",
+
+  "treasury": {
+    "$comment": "11155111 = Ethereum Sepolia. Chosen for development because it is one of only two chains with private mempool routing, so payout behaviour matches Ethereum mainnet exactly.",
+    "chainId": 11155111,
+    "address": "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9"
+  },
+
+  "contributors": [
+    {
+      "$comment": "shareBps must sum to exactly 10000. Replace these with real addresses before running.",
+      "name": "model-provider",
+      "address": "0x000000000000000000000000000000000000dEaD",
+      "shareBps": 5000
+    },
+    {
+      "name": "tool-author",
+      "address": "0x000000000000000000000000000000000000bEEF",
+      "shareBps": 3000
+    },
+    {
+      "name": "host",
+      "address": "0x00000000000000000000000000000000DeaDBeef",
+      "shareBps": 2000
+    }
+  ],
+
+  "float": [
+    {
+      "$comment": "Keep 0.01 ETH of gas on Sepolia; top back up to 0.05 when it dips. Below the floor the agent risks stalling mid-task.",
+      "chainId": 11155111,
+      "minBalance": "10000000000000000",
+      "targetBalance": "50000000000000000"
+    }
+  ],
+
+  "yield": {
+    "$comment": "Disabled until the payout path is proven. Surplus is the last claim on the money, never the first.",
+    "enabled": false,
+    "protocol": "aave-v3",
+    "chainId": 8453,
+    "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "buffer": "100000000"
+  },
+
+  "policy": {
+    "$comment": "Deliberately tight for development. 0.02 ETH per transfer, 0.1 ETH per rolling 24h.",
+    "maxPerTransfer": "20000000000000000",
+    "maxPerDay": "100000000000000000",
+    "allowlist": [],
+    "requireApprovalAbove": "10000000000000000"
+  }
+}
