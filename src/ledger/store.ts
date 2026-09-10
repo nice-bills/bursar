@@ -28,10 +28,14 @@ export interface LedgerEntry {
   chainId: number;
   /** Recipient. For yield deposits this is the pool address. */
   to: string;
-  /** Base units, decimal string. */
+  /** Base units, as an integer string. */
   amount: string;
   /** ERC-20 address, or null for the chain's native asset. */
   token: string | null;
+  /** Decimals of the asset, so the ledger is readable without config context. */
+  decimals: number;
+  /** Explorer URLs for the confirmed transactions. */
+  transactionLinks?: string[];
   /** Free-text: contributor name, "gas top-up", etc. */
   memo: string;
   executionId?: string;

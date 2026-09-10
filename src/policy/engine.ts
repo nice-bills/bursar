@@ -21,9 +21,11 @@ export interface Movement {
   leg: Leg;
   chainId: number;
   to: string;
-  /** Base units, decimal string. */
+  /** Base units, as an integer string. Converted to decimal at the API edge. */
   amount: string;
   token: string | null;
+  /** Decimals of the asset being moved — 18 for native, 6 for USDC. */
+  decimals: number;
   memo: string;
 }
 

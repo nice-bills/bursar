@@ -10,8 +10,9 @@
 import type { BursarConfig } from "../config.js";
 import { PRIVATE_MEMPOOL_CHAINS } from "../config.js";
 import type { KeeperHubClient } from "../keeperhub/client.js";
-import { isSuccess } from "../keeperhub/client.js";
+import { isSuccess, isTerminal } from "../keeperhub/client.js";
 import { Ledger, type LedgerEntry } from "../ledger/store.js";
+import { formatUnits } from "../units.js";
 import type { Movement, PolicyEngine } from "../policy/engine.js";
 
 export type MoveOutcome =
@@ -73,6 +74,7 @@ export class Executor {
       to: movement.to,
       amount: movement.amount,
       token: movement.token,
+      decimals: movement.decimals,
       memo: movement.memo,
     };
     await this.ledger.append({ ...base, status: "intent" });
@@ -82,8 +84,9 @@ export class Executor {
       const submitted = await this.client.transfer(
         {
           chainId: String(movement.chainId),
-          to: movement.to,
-          amount: movement.amount,
+          recipientAddress: movement.to,
+          // The boundary: exact integer base units in, decimal string out.
+          amount: formatUnits(BigInt(movement.amount), movement.decimals),
           tokenAddress: movement.token ?? undefined,
         },
         intentId,
@@ -92,9 +95,14 @@ export class Executor {
       executionId = submitted.executionId;
       await this.ledger.append({ ...base, status: "submitted", executionId });
 
-      const final = executionId
-        ? await this.client.awaitExecution(executionId)
-        : submitted;
+      // Direct transfers complete synchronously: the POST already carries a
+      // terminal status, and there is no workflow execution to poll — the
+      // /workflows/executions/* endpoints 404 for these. Only poll when the
+      // response says the work is still running.
+      const final =
+        executionId && !isTerminal(submitted.status)
+          ? await this.client.awaitExecution(executionId)
+          : submitted;
 
       if (isSuccess(final.status)) {
         const entry = await this.ledger.append({
@@ -102,6 +110,7 @@ export class Executor {
           status: "confirmed",
           executionId,
           transactionHashes: final.transactionHashes,
+          transactionLinks: final.transactionLinks,
         });
         return { result: "confirmed", entry, transactionHashes: final.transactionHashes };
       }
@@ -135,8 +144,21 @@ export class Executor {
   }
 
   /**
-   * Resolve every open intent against KeeperHub's record of what actually
-   * happened. This is what unblocks the policy engine after a crash.
+   * Resolve every open intent by replaying it under its original idempotency
+   * key.
+   *
+   * This is the payoff of intent-first logging. Confirmed against the live API:
+   * a recognised idempotency key returns the ORIGINAL execution, flagged
+   * `idempotentReplay: true`, without running a second transaction. So replay
+   * is not a guess about what happened —
+   *
+   *   - if the movement did execute, the server hands back the original
+   *     transaction hash and we close the intent with the truth;
+   *   - if it never executed, it executes now, completing a movement policy
+   *     already approved before it was ever written down.
+   *
+   * Either way the ledger ends up agreeing with the chain, which is the only
+   * state from which it is safe to move more money.
    */
   async reconcile(): Promise<{ resolved: number; stillOpen: number; details: string[] }> {
     const open = await this.ledger.openIntents();
@@ -144,41 +166,48 @@ export class Executor {
     let resolved = 0;
 
     for (const entry of open) {
-      if (!entry.executionId) {
-        // Never made it to submission — no execution to ask about. The intent
-        // was written, the call never happened, so nothing moved.
-        await this.ledger.append({ ...entry, status: "abandoned", error: "never submitted" });
-        details.push(`${entry.intentId}: abandoned (never submitted)`);
-        resolved++;
-        continue;
-      }
-
       try {
-        const status = await this.client.getExecutionStatus(entry.executionId);
-        if (isSuccess(status.status)) {
+        const result = await this.client.transfer(
+          {
+            chainId: String(entry.chainId),
+            recipientAddress: entry.to,
+            amount: formatUnits(BigInt(entry.amount), entry.decimals),
+            tokenAddress: entry.token ?? undefined,
+          },
+          entry.intentId,
+        );
+
+        const how = result.idempotentReplay ? "already executed" : "completed now";
+
+        if (isSuccess(result.status)) {
           await this.ledger.append({
             ...entry,
             status: "confirmed",
-            transactionHashes: status.transactionHashes,
+            executionId: result.executionId,
+            transactionHashes: result.transactionHashes,
+            transactionLinks: result.transactionLinks,
           });
           details.push(
-            `${entry.intentId}: confirmed (${status.transactionHashes.join(", ") || "no hash"})`,
+            `${entry.intentId}: confirmed, ${how} (${result.transactionHashes.join(", ") || "no hash"})`,
           );
           resolved++;
-        } else if (isTerminalFailure(status.status)) {
+        } else if (isTerminal(result.status)) {
           await this.ledger.append({
             ...entry,
             status: "failed",
-            error: `execution finished as ${status.status}`,
+            executionId: result.executionId,
+            error: `execution finished as ${result.status}`,
           });
-          details.push(`${entry.intentId}: failed (${status.status})`);
+          details.push(`${entry.intentId}: failed (${result.status})`);
           resolved++;
         } else {
-          details.push(`${entry.intentId}: still ${status.status}`);
+          details.push(`${entry.intentId}: still ${result.status}`);
         }
       } catch (error) {
+        // Leave it open. An intent we could not resolve must keep blocking
+        // further movement rather than being quietly written off.
         details.push(
-          `${entry.intentId}: could not resolve (${error instanceof Error ? error.message : String(error)})`,
+          `${entry.intentId}: unresolved (${error instanceof Error ? error.message : String(error)})`,
         );
       }
     }
@@ -196,9 +225,4 @@ export class Executor {
       ? configured
       : (PRIVATE_MEMPOOL_CHAINS[0] ?? configured);
   }
-}
-
-function isTerminalFailure(status: string): boolean {
-  const s = status.toLowerCase();
-  return s === "failed" || s === "error" || s === "cancelled" || s === "canceled";
 }

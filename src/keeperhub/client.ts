@@ -33,6 +33,14 @@ export interface ExecutionResult {
   executionId: string;
   status: string;
   transactionHashes: string[];
+  /** Explorer URLs, when the API supplies them. These go in the demo/report. */
+  transactionLinks: string[];
+  /**
+   * True when the API recognised our idempotency key and returned the original
+   * execution instead of running a second one. Confirmed working against the
+   * live API — this is what makes replay-based reconciliation safe.
+   */
+  idempotentReplay: boolean;
   output: unknown;
   /** The unparsed payload, so callers can dig into fields we don't model yet. */
   raw: Record<string, unknown>;
@@ -40,8 +48,14 @@ export interface ExecutionResult {
 
 export interface TransferParams {
   chainId: string;
-  to: string;
-  /** Base units (wei for native, smallest unit for ERC-20). */
+  /** The API's field name is `recipientAddress` — not `to`. */
+  recipientAddress: string;
+  /**
+   * Human-readable decimal string, NOT base units. "0.000001" means 1e-6 of
+   * the asset. Confirmed empirically: passing wei here is read as whole ether
+   * and trips the org spending cap. Convert with `formatUnits` at this
+   * boundary; everything upstream of the client reasons in base units.
+   */
   amount: string;
   /** Omit for the chain's native asset. */
   tokenAddress?: string;
@@ -303,6 +317,8 @@ function normalizeExecution(body: unknown): ExecutionResult {
 
   const hashes = inner.transactionHashes ?? inner.transaction_hashes ?? inner.txHashes;
   const single = inner.transactionHash ?? inner.transaction_hash ?? inner.txHash;
+  const links = inner.transactionLinks ?? inner.transaction_links;
+  const singleLink = inner.transactionLink ?? inner.transaction_link;
 
   return {
     executionId: String(
@@ -314,6 +330,12 @@ function normalizeExecution(body: unknown): ExecutionResult {
       : typeof single === "string"
         ? [single]
         : [],
+    transactionLinks: Array.isArray(links)
+      ? links.map(String)
+      : typeof singleLink === "string"
+        ? [singleLink]
+        : [],
+    idempotentReplay: Boolean(inner.idempotentReplay ?? raw.idempotentReplay ?? false),
     output: inner.output ?? raw.output ?? null,
     raw,
   };

@@ -145,6 +145,7 @@ describe("PolicyEngine", () => {
     to: contributors[0]!.address,
     amount: "500",
     token: null,
+    decimals: 18,
     memo: "test",
   };
 
@@ -188,6 +189,7 @@ describe("PolicyEngine", () => {
         to: contributors[1]!.address,
         amount: "1800",
         token: null,
+        decimals: 18,
         memo: "in flight",
       });
 
@@ -207,6 +209,7 @@ describe("PolicyEngine", () => {
         to: contributors[0]!.address,
         amount: "1",
         token: null,
+        decimals: 18,
         memo: "crashed mid-flight",
       });
 

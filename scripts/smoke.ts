@@ -11,7 +11,8 @@
 
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
-import { KeeperHubClient, KeeperHubError, isSuccess } from "../src/keeperhub/client.js";
+import { KeeperHubClient, KeeperHubError, isSuccess, isTerminal } from "../src/keeperhub/client.js";
+import { formatUnits, NATIVE_DECIMALS } from "../src/units.js";
 
 const EXECUTE = process.argv.includes("--execute");
 
@@ -61,26 +62,37 @@ async function main(): Promise<void> {
   // 4. Move value ---------------------------------------------------------
   const to = process.env.BURSAR_SMOKE_TO;
   const chainId = process.env.BURSAR_CHAIN_ID;
+  // Base units internally, converted at the client boundary — the same path
+  // real movements take, so this smoke test exercises the actual conversion.
   const amount = process.env.BURSAR_SMOKE_AMOUNT ?? "1000000000000"; // 1e-6 native
+  const decimal = formatUnits(BigInt(amount), NATIVE_DECIMALS);
   if (!to) fail("BURSAR_SMOKE_TO is not set — refusing to guess a recipient.");
   if (!chainId) fail("BURSAR_CHAIN_ID is not set.");
 
-  step(`Transferring ${amount} base units to ${to} on chain ${chainId}`);
+  step(`Transferring ${decimal} (${amount} base units) to ${to} on chain ${chainId}`);
 
   // Stable key: a retry of *this* run must not double-send. A new run gets a
   // new key, which is what we want for a deliberate second transfer.
   const idempotencyKey = `smoke-${randomUUID()}`;
 
   const execution = await client.transfer(
-    { chainId, to, amount, tokenAddress: process.env.BURSAR_SMOKE_TOKEN },
+    {
+      chainId,
+      recipientAddress: to,
+      amount: decimal,
+      tokenAddress: process.env.BURSAR_SMOKE_TOKEN,
+    },
     idempotencyKey,
   );
 
   ok(`Submitted, execution ${execution.executionId} (${execution.status})`);
 
-  const final = execution.executionId
-    ? await client.awaitExecution(execution.executionId)
-    : execution;
+  // Direct transfers return a terminal status inline; the workflow polling
+  // endpoints 404 for them. Only poll if it is genuinely still running.
+  const final =
+    execution.executionId && !isTerminal(execution.status)
+      ? await client.awaitExecution(execution.executionId)
+      : execution;
 
   if (isSuccess(final.status)) {
     ok(`Execution ${final.status}`);
@@ -91,6 +103,7 @@ async function main(): Promise<void> {
   if (final.transactionHashes.length > 0) {
     console.log("\n  Transaction hashes (this is the hackathon deliverable):");
     for (const hash of final.transactionHashes) console.log(`    ${hash}`);
+    for (const link of final.transactionLinks) console.log(`    ${link}`);
   } else {
     console.warn("\n  No transaction hash returned — inspect the raw payload below.");
     detail(final.raw);
