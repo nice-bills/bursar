@@ -31,6 +31,10 @@ Crash recovery, proven against the live API rather than asserted
 | --- | --- | --- |
 | Crash **before** submit | reconcile completes the approved movement | [`0x15f8431a…`](https://sepolia.etherscan.io/tx/0x15f8431a0f125205b46aaaa5ac2bf1b5000a463ee5c19e0cf0c95cf336ed4a8c) |
 | Crash **after** submit | reconcile recovers the *original* transaction, no second transfer | [`0x179a1859…`](https://sepolia.etherscan.io/tx/0x179a18592959181196d6563a3f8f4f7e7f6d9250a2acecbe9679f34f291434c9) |
+| Balance below floor | the float's top-up branch executes | [`0x9717aff4…`](https://sepolia.etherscan.io/tx/0x9717aff48b014f40b9f72b9a8629097747fe345ba6c305f280d308515e73c945) |
+
+And through a real ElizaOS agent, dispatched by `runtime.processActions`
+(`npm run agent -- --execute`): [`0x2489815f…`](https://sepolia.etherscan.io/tx/0x2489815fa0bcb762d89de430092f535f7ab268a2e1ed26f10d9dd6674ef17cb2)
 
 Reproduce with `npm run demo -- --execute`. Run it twice: the second run pays
 nobody, because every movement is idempotent by construction.
@@ -207,9 +211,6 @@ Stated plainly, since the submission form asks.
 - Sweep and yield legs are not implemented; the config schema anticipates them.
 - Testnet only so far. Nothing is chain-specific about the code, but the mainnet
   path has not been exercised.
-- The float has never actually *topped up*, because the wallet has stayed above
-  its floor. The path is exercised end to end; only the transfer branch is
-  unproven.
 - The float decision runs in-process, so it does not survive the agent being
   down — see the resolver limitation above.
 - `Executor.payoutChain()` prefers a private-mempool chain, but there is no
@@ -219,6 +220,12 @@ Stated plainly, since the submission form asks.
   to them, which is what blocks the yield leg today.
 - The mutex is per-process. Two processes sharing one ledger file could still
   race; the service is a runtime singleton, so this holds for one agent.
+- The agent harness drives a deterministic stub model, not a language model.
+  Plugin wiring is proven end to end; an LLM *choosing* the action from natural
+  language is not.
+- KeeperHub enforces a server-side daily spending cap per organisation. Running
+  the full chaos suite repeatedly in one day can exhaust it, and scenarios then
+  fail for that reason rather than a defect.
 
 ## Layout
 

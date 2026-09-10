@@ -20,6 +20,7 @@ import { Ledger, dailyPeriod } from "../src/ledger/store.js";
 import { PolicyEngine } from "../src/policy/engine.js";
 import { Executor } from "../src/treasury/executor.js";
 import { NATIVE_DECIMALS, formatUnits } from "../src/units.js";
+import { floatMonitorWorkflow, readBalanceOutput } from "../src/treasury/workflows.js";
 
 const EXECUTE = process.argv.includes("--execute");
 
@@ -232,6 +233,64 @@ async function main(): Promise<void> {
         "recovered the ORIGINAL hash — no second transaction was sent",
       );
       console.log(`    recovered  : ${entry?.transactionHashes?.[0]}`);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // --- 7. The float top-up branch ------------------------------------------
+  await scenario("A balance below the floor actually triggers a top-up", async () => {
+    const { ledger, dir } = await tempLedger();
+    try {
+      // The committed config keeps the floor below the real balance, so the
+      // top-up branch never runs. Raise the floor above it here so the branch
+      // is exercised for real. The float address is the org signer, so the
+      // transfer is a self-transfer: it proves the path without moving value
+      // anywhere it cannot come back from.
+      const floor = "600000000000000000"; // 0.6 ETH, above the wallet's balance
+      const target = "600001000000000000"; // top-up = 0.000001
+      const raised = configSchema.parse({
+        ...config,
+        float: [{ ...config.float[0], minBalance: floor, targetBalance: target }],
+      });
+
+      const executor = new Executor(client, ledger, new PolicyEngine(raised, ledger), raised);
+      const floatTarget = raised.float[0]!;
+
+      const workflow = floatMonitorWorkflow(floatTarget);
+      const created = await client.createWorkflow(workflow, `chaos-float-${Date.now()}`);
+      const workflowId = String((created as { id?: string })?.id ?? "");
+
+      const run = await client.executeWorkflow(workflowId, {}, `chaos-run-${Date.now()}`);
+      const final = await client.awaitExecution(run.executionId);
+      const reading = readBalanceOutput(final.output);
+
+      check(reading !== null, "the monitor workflow returned a balance");
+      if (!reading) return;
+
+      const balance = BigInt(reading.balanceWei);
+      check(balance < BigInt(floor), `balance ${reading.balance} is below the raised floor`);
+
+      const amount = (BigInt(target) - BigInt(floor)).toString();
+      const outcome = await executor.move(
+        {
+          leg: "float",
+          chainId: floatTarget.chainId,
+          to: floatTarget.address,
+          amount,
+          token: null,
+          decimals: NATIVE_DECIMALS,
+          memo: "chaos: forced top-up",
+        },
+        `chaos-float-${Date.now()}`,
+      );
+
+      check(outcome.result === "confirmed", "the top-up executed onchain");
+      if (outcome.result === "confirmed") {
+        console.log(`    ${outcome.entry.transactionLinks?.[0] ?? outcome.transactionHashes[0]}`);
+      } else if (outcome.result === "blocked") {
+        console.log(`    blocked: ${outcome.reason}`);
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
