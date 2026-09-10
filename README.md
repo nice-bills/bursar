@@ -33,8 +33,16 @@ Crash recovery, proven against the live API rather than asserted
 | Crash **after** submit | reconcile recovers the *original* transaction, no second transfer | [`0x179a1859…`](https://sepolia.etherscan.io/tx/0x179a18592959181196d6563a3f8f4f7e7f6d9250a2acecbe9679f34f291434c9) |
 | Balance below floor | the float's top-up branch executes | [`0x9717aff4…`](https://sepolia.etherscan.io/tx/0x9717aff48b014f40b9f72b9a8629097747fe345ba6c305f280d308515e73c945) |
 
-And through a real ElizaOS agent, dispatched by `runtime.processActions`
-(`npm run agent -- --execute`): [`0x2489815f…`](https://sepolia.etherscan.io/tx/0x2489815fa0bcb762d89de430092f535f7ab268a2e1ed26f10d9dd6674ef17cb2)
+And through a real ElizaOS agent, where a language model read the request in
+plain English, chose `PAY_CONTRIBUTORS`, and the payout executed
+(`npm run agent -- --execute`):
+
+> "We earned some revenue this week. Please pay out 0.0000021 to the contributors."
+
+| Contributor | Share | Transaction |
+| --- | --- | --- |
+| model-provider | 60% | [`0x849da664…`](https://sepolia.etherscan.io/tx/0x849da66409dd9866824ef063fd731968f863962e615d6974a21861e9248d4357) |
+| tool-author | 40% | [`0x90d68676…`](https://sepolia.etherscan.io/tx/0x90d686769ac52ccccc0d56b4c41d0bd9c0dffd6af4d065699a5d0b455c212210) |
 
 Reproduce with `npm run demo -- --execute`. Run it twice: the second run pays
 nobody, because every movement is idempotent by construction.
@@ -63,6 +71,12 @@ bug the standalone tests could not: the provider was marked `dynamic: true`,
 and `composeState` filters on `!p.private && !p.dynamic`, so treasury state was
 silently absent from every prompt. `dynamic` does not mean "recompute each
 time" — providers are always called fresh — it means "opt-in only".
+
+The provider then paid for itself. Asked to *"pay out 5"* — far above the
+0.02 ceiling — the model did not attempt it and get refused. It read the limits
+out of the TREASURY provider and declined up front, quoting them back and
+offering an amount that would fit. That is the difference between an agent that
+learns its constraints from a failure and one that knows them while reasoning.
 
 **Actions** — `PAY_CONTRIBUTORS`, `RECONCILE_TREASURY`, `TREASURY_REPORT` —
 with `validate()` gates that are real. `PAY_CONTRIBUTORS` refuses to be offered
@@ -137,6 +151,11 @@ cp bursar.config.example.json bursar.config.json
 npm run smoke                              # read-only: auth, wallet, chains
 npm test
 ```
+
+To have a real model choose the actions, add a free
+[OpenRouter](https://openrouter.ai) key as `OPENROUTER_API_KEY`. OpenRouter
+does not serve embeddings, so a local zero-vector stub covers those; the
+harness never searches by similarity, so only their width matters.
 
 Then, in an ElizaOS character:
 
@@ -220,9 +239,10 @@ Stated plainly, since the submission form asks.
   to them, which is what blocks the yield leg today.
 - The mutex is per-process. Two processes sharing one ledger file could still
   race; the service is a runtime singleton, so this holds for one agent.
-- The agent harness drives a deterministic stub model, not a language model.
-  Plugin wiring is proven end to end; an LLM *choosing* the action from natural
-  language is not.
+- Free OpenRouter models are rate-limited and go "temporarily overloaded"
+  without warning, so `npm run agent` tries several in turn. With no
+  `OPENROUTER_API_KEY` it falls back to a deterministic stub, which exercises
+  every plugin surface but cannot show a model choosing the action.
 - KeeperHub enforces a server-side daily spending cap per organisation. Running
   the full chaos suite repeatedly in one day can exhaust it, and scenarios then
   fail for that reason rather than a defect.

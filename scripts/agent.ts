@@ -44,9 +44,36 @@ import {
 } from "@elizaos/plugin-sql";
 
 import bursarPlugin, { BursarService } from "../src/index.js";
-import { stubModelPlugin } from "../src/eliza/stub-model.js";
+import { stubModelPlugin, embeddingStubPlugin } from "../src/eliza/stub-model.js";
 
 const EXECUTE = process.argv.includes("--execute");
+
+/**
+ * Use a real model when one is configured.
+ *
+ * OpenRouter serves text but not embeddings, so it is paired with the local
+ * embedding stub. Without a key the whole model layer is stubbed, which still
+ * exercises every plugin surface — it just cannot show a model *choosing* the
+ * action.
+ */
+const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
+/**
+ * Free OpenRouter models, in preference order.
+ *
+ * Free endpoints are rate-limited and go "temporarily overloaded" without
+ * warning, so a single model makes the harness flaky for reasons that have
+ * nothing to do with the treasury. Each is tried in turn.
+ */
+const MODELS = process.env.BURSAR_MODEL
+  ? [process.env.BURSAR_MODEL]
+  : [
+      "nvidia/nemotron-3-ultra-550b-a55b:free",
+      "nvidia/nemotron-3.5-lightning:free",
+      "nex-agi/nex-n2.5-pro:free",
+      "inclusionai/ling-3.0-flash-fin:free",
+    ];
+const MODEL = MODELS[0]!;
+const USE_REAL_MODEL = Boolean(OPENROUTER_KEY);
 
 let checks = 0;
 let failures = 0;
@@ -110,7 +137,23 @@ const character: Character = {
 async function main(): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), "bursar-agent-"));
 
+  // bootstrap supplies the ACTIONS provider that tells the model what it can
+  // do, plus REPLY/IGNORE — without it there is nothing for a model to choose
+  // between and the selection proves nothing.
+  const { bootstrapPlugin } = await import("@elizaos/plugin-bootstrap");
+
+  const modelPlugins = USE_REAL_MODEL
+    ? [
+        sqlPlugin,
+        (await import("@elizaos/plugin-openrouter")).openrouterPlugin,
+        embeddingStubPlugin,
+        bootstrapPlugin,
+        bursarPlugin,
+      ]
+    : [sqlPlugin, stubModelPlugin, bootstrapPlugin, bursarPlugin];
+
   banner("1. Booting a real ElizaOS agent");
+  console.log(`  model: ${USE_REAL_MODEL ? MODEL : "deterministic stub (no OPENROUTER_API_KEY)"}`);
 
   // ElizaOS is the orchestrator the CLI uses: it runs database migrations and
   // brings the runtime up. Constructing AgentRuntime directly skips migrations
@@ -130,7 +173,7 @@ async function main(): Promise<void> {
 
   const migrations = new DatabaseMigrationService();
   await migrations.initializeWithDatabase(adapter.getDatabase());
-  migrations.discoverAndRegisterPluginSchemas([sqlPlugin, stubModelPlugin, bursarPlugin]);
+  migrations.discoverAndRegisterPluginSchemas(modelPlugins);
   await migrations.runAllPluginMigrations();
   console.log("  database migrated");
 
@@ -140,7 +183,7 @@ async function main(): Promise<void> {
         {
           character,
           databaseAdapter: adapter,
-          plugins: [sqlPlugin, stubModelPlugin, bursarPlugin],
+          plugins: modelPlugins,
           settings: {
             // pglite is used when no Postgres URL is configured.
             PGLITE_DATA_DIR: join(dataDir, "db"),
@@ -148,6 +191,9 @@ async function main(): Promise<void> {
             KEEPERHUB_BASE_URL: process.env.KEEPERHUB_BASE_URL ?? "",
             BURSAR_CONFIG_PATH: process.env.BURSAR_CONFIG_PATH ?? "bursar.config.json",
             BURSAR_LEDGER_PATH: join(dataDir, "ledger.jsonl"),
+            OPENROUTER_API_KEY: OPENROUTER_KEY ?? "",
+            OPENROUTER_SMALL_MODEL: MODEL,
+            OPENROUTER_LARGE_MODEL: MODEL,
           },
         },
       ],
@@ -279,6 +325,118 @@ async function main(): Promise<void> {
         replies.some((r) => /paid|already paid|blocked/i.test(r)),
         "the reply reports the payout outcome",
       );
+    }
+
+    // --- 5. The model chooses the action -----------------------------------
+    if (USE_REAL_MODEL) {
+      banner("5. The model picks the action (full ElizaOS message pipeline)");
+
+      // A dry run must not spend. Rather than skip the model entirely, ask for
+      // an amount above the per-transfer ceiling: the model still has to choose
+      // PAY_CONTRIBUTORS from natural language, and the policy engine then
+      // refuses it. That proves selection and refusal in one pass.
+      // A distinct amount from step 4, so the model's payout is its own
+      // movement rather than an idempotent replay of one already made.
+      const request = EXECUTE
+        ? "We earned some revenue this week. Please pay out 0.0000021 to the contributors."
+        : "We earned a lot this week. Please pay out 5 to the contributors.";
+
+      const ask: Memory = {
+        id: randomUUID() as UUID,
+        entityId,
+        agentId: runtime.agentId,
+        roomId,
+        content: {
+          text: request,
+          source: "agent-harness",
+          channelType: ChannelType.DM,
+        } as Content,
+        createdAt: Date.now(),
+      };
+      await runtime.createMemory(ask, "messages");
+      console.log(`  user: "${ask.content.text}"`);
+
+      const replies: string[] = [];
+      const messageService = runtime.messageService;
+      if (!messageService) {
+        check(false, "the runtime exposes a message service");
+      } else {
+        const callback = async (content: Content) => {
+          const text = String(content.text ?? "");
+          if (text.trim()) {
+            replies.push(text);
+            for (const line of text.split("\n")) console.log(`  │ ${line}`);
+          }
+          return [];
+        };
+
+        // Try each free model until one answers. Overload on a free endpoint is
+        // not a failure of the integration, so it should not read as one.
+        let result: Awaited<ReturnType<typeof messageService.handleMessage>> | undefined;
+        for (const model of MODELS) {
+          runtime.setSetting("OPENROUTER_SMALL_MODEL", model);
+          runtime.setSetting("OPENROUTER_LARGE_MODEL", model);
+          try {
+            console.log(`  trying ${model} ...`);
+            result = await messageService.handleMessage(runtime, ask, callback, {
+              timeoutDuration: 240_000,
+            });
+            console.log(`  answered by ${model}`);
+            break;
+          } catch (error) {
+            console.log(
+              `  ${model} unavailable (${error instanceof Error ? error.message.slice(0, 70) : String(error)})`,
+            );
+          }
+        }
+
+        if (!result) {
+          check(false, "at least one free model answered");
+          throw new Error("every free model was unavailable; re-run or set BURSAR_MODEL");
+        }
+
+        const chosen = (result.responseContent?.actions ?? []) as string[];
+        console.log(`  model chose: ${chosen.join(", ") || "(nothing)"}`);
+
+        check(result.didRespond, "the agent decided to respond");
+
+        if (EXECUTE) {
+          check(
+            chosen.includes("PAY_CONTRIBUTORS"),
+            "the model selected PAY_CONTRIBUTORS from natural language",
+          );
+          check(
+            replies.some((r) => /paid|already paid/i.test(r)),
+            "and the payout executed through KeeperHub",
+          );
+        } else {
+          // Asked for an amount above the ceiling, there are two acceptable
+          // outcomes, and the better one is the second:
+          //
+          //   - the model picks PAY_CONTRIBUTORS and the policy engine refuses;
+          //   - the model reads the limits out of the TREASURY provider and
+          //     declines before spending anything.
+          //
+          // The second is what actually happens, and it is the provider paying
+          // for itself: the agent knows its constraints while reasoning rather
+          // than discovering them from a failure.
+          const refusedUpfront = replies.some((r) => /limit|exceed|0\.02|0\.1/i.test(r));
+          const triedAndBlocked =
+            chosen.includes("PAY_CONTRIBUTORS") &&
+            replies.some((r) => /blocked|exceeds|maxPerTransfer/i.test(r));
+
+          check(
+            refusedUpfront || triedAndBlocked,
+            refusedUpfront
+              ? "the model read the spending limits from the TREASURY provider and declined"
+              : "the model tried and the policy engine refused it",
+          );
+          check(
+            !replies.some((r) => /paid —/.test(r)),
+            "nothing was paid on a dry run",
+          );
+        }
+      }
     }
 
     banner(`${checks - failures}/${checks} checks passed`);

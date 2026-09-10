@@ -25,6 +25,8 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@elizaos/plugin-bootstrap": "^1.7.2",
+    "@elizaos/plugin-openrouter": "^1.5.17",
     "@elizaos/plugin-sql": "^1.7.2",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",

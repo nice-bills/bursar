@@ -26,3 +26,21 @@ export const stubModelPlugin: Plugin = {
     [ModelType.TEXT_EMBEDDING]: async () => new Array(384).fill(0),
   },
 };
+
+/**
+ * Embeddings only.
+ *
+ * OpenRouter serves text generation but not embeddings, and ElizaOS needs a
+ * `TEXT_EMBEDDING` handler to store memories. Pairing this with
+ * plugin-openrouter gives a real model for the decisions that matter and a
+ * local zero-vector for the ones that do not: the harness never searches by
+ * similarity, so the embedding's content is irrelevant — only its presence and
+ * its width are.
+ */
+export const embeddingStubPlugin: Plugin = {
+  name: "stub-embeddings",
+  description: "Fixed-width zero embeddings, so memories can be stored without an embedding provider.",
+  models: {
+    [ModelType.TEXT_EMBEDDING]: async () => new Array(384).fill(0),
+  },
+};

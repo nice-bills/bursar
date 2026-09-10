@@ -22,3 +22,17 @@ declare module "@elizaos/plugin-sql" {
     runAllPluginMigrations(): Promise<void>;
   }
 }
+
+/** plugin-bootstrap ships no type declarations at all. */
+declare module "@elizaos/plugin-bootstrap" {
+  import type { Plugin } from "@elizaos/core";
+  export const bootstrapPlugin: Plugin;
+  export default bootstrapPlugin;
+}
+
+/** plugin-openrouter's types are not resolvable through its exports map. */
+declare module "@elizaos/plugin-openrouter" {
+  import type { Plugin } from "@elizaos/core";
+  export const openrouterPlugin: Plugin;
+  export default openrouterPlugin;
+}
