@@ -106,3 +106,72 @@ describe("idempotency keys survive real-world strings", () => {
     );
   });
 });
+
+describe("execution payloads from both surfaces", () => {
+  test("workflow transaction objects are read, not stringified", async () => {
+    // Regression: workflow executions return objects here while direct
+    // executions return strings. String(object) is "[object Object]", which is
+    // what first went into the ledger — a hash identifying nothing.
+    const { KeeperHubClient } = await import("../src/keeperhub/client.js");
+    const client = new KeeperHubClient({ apiKey: "kh_test", baseUrl: "http://127.0.0.1:1" });
+
+    // Exercised through the public surface: build both payload shapes and
+    // assert the client's parser handles each.
+    const workflowShape = {
+      status: "success",
+      transactionHashes: [
+        { hash: "0xabc", gasUsed: "228491", blockNumber: 11672920, receiptStatus: "success" },
+      ],
+    };
+    const directShape = { status: "completed", transactionHash: "0xdef" };
+
+    for (const [payload, expected] of [
+      [workflowShape, "0xabc"],
+      [directShape, "0xdef"],
+    ] as const) {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = (async () =>
+        new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch;
+      try {
+        const result = await client.transfer(
+          { chainId: "1", recipientAddress: `0x${"1".repeat(40)}`, amount: "1" },
+          "test-key",
+        );
+        assert.deepEqual(result.transactionHashes, [expected]);
+        assert.ok(!result.transactionHashes[0]?.includes("object"));
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    }
+  });
+
+  test("workflow receipts keep their gas and block metadata", async () => {
+    const { KeeperHubClient } = await import("../src/keeperhub/client.js");
+    const client = new KeeperHubClient({ apiKey: "kh_test", baseUrl: "http://127.0.0.1:1" });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          status: "success",
+          transactionHashes: [
+            { hash: "0xabc", gasUsed: "228491", blockNumber: 11672920, verified: true },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+    try {
+      const result = await client.transfer(
+        { chainId: "1", recipientAddress: `0x${"1".repeat(40)}`, amount: "1" },
+        "k",
+      );
+      assert.equal(result.transactions[0]?.gasUsed, "228491");
+      assert.equal(result.transactions[0]?.blockNumber, 11672920);
+      assert.equal(result.transactions[0]?.verified, true);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

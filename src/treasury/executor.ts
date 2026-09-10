@@ -10,10 +10,18 @@
 import type { BursarConfig } from "../config.js";
 import { PRIVATE_MEMPOOL_CHAINS } from "../config.js";
 import type { KeeperHubClient } from "../keeperhub/client.js";
-import { isSuccess, isTerminal } from "../keeperhub/client.js";
+import { isSuccess, isTerminal, type ExecutionResult } from "../keeperhub/client.js";
 import { Ledger, type LedgerEntry } from "../ledger/store.js";
 import { formatUnits } from "../units.js";
 import type { Movement, PolicyEngine } from "../policy/engine.js";
+
+/**
+ * How a movement reaches the chain.
+ *
+ * Receives the intent id so whatever it calls uses the same idempotency key,
+ * which is what makes replay-based reconciliation work for non-transfers too.
+ */
+export type Submit = (idempotencyKey: string) => Promise<ExecutionResult>;
 
 export type MoveOutcome =
   | { result: "confirmed"; entry: LedgerEntry; transactionHashes: string[] }
@@ -63,14 +71,20 @@ export class Executor {
    * the same amount in the same period are the same payment, and the second is
    * a no-op. Pass `nonce` when a genuine second payment is intended.
    */
-  move(movement: Movement, period: string, nonce?: string): Promise<MoveOutcome> {
-    return this.mutex.run(() => this.moveExclusive(movement, period, nonce));
+  move(
+    movement: Movement,
+    period: string,
+    nonce?: string,
+    submit?: Submit,
+  ): Promise<MoveOutcome> {
+    return this.mutex.run(() => this.moveExclusive(movement, period, nonce, submit));
   }
 
   private async moveExclusive(
     movement: Movement,
     period: string,
     nonce?: string,
+    submit?: Submit,
   ): Promise<MoveOutcome> {
     const intentId = Ledger.intentId({
       leg: movement.leg,
@@ -112,16 +126,22 @@ export class Executor {
 
     let executionId = "";
     try {
-      const submitted = await this.client.transfer(
-        {
-          chainId: String(movement.chainId),
-          recipientAddress: movement.to,
-          // The boundary: exact integer base units in, decimal string out.
-          amount: formatUnits(BigInt(movement.amount), movement.decimals),
-          tokenAddress: movement.token ?? undefined,
-        },
-        intentId,
-      );
+      // A plain transfer unless the caller supplies something else. Supplying
+      // to a lending pool is not a transfer, but it is still value leaving the
+      // treasury, so it must pass through the same policy, ledger and
+      // idempotency rather than around them.
+      const submitted = submit
+        ? await submit(intentId)
+        : await this.client.transfer(
+            {
+              chainId: String(movement.chainId),
+              recipientAddress: movement.to,
+              // The boundary: exact integer base units in, decimal string out.
+              amount: formatUnits(BigInt(movement.amount), movement.decimals),
+              tokenAddress: movement.token ?? undefined,
+            },
+            intentId,
+          );
 
       executionId = submitted.executionId;
       await this.ledger.append({ ...base, status: "submitted", executionId });

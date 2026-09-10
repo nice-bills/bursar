@@ -9,7 +9,7 @@
  * Deny is the default. A movement is allowed only by passing every check.
  */
 
-import type { BursarConfig } from "../config.js";
+import { assetPolicyFor, type BursarConfig } from "../config.js";
 import type { Leg, Ledger } from "../ledger/store.js";
 
 export type Decision =
@@ -70,29 +70,48 @@ export class PolicyEngine {
       };
     }
 
-    // 2. One cap, one asset.
+    // 2. Pick the limits that belong to this asset.
     //
-    //    `maxPerTransfer` and `maxPerDay` are plain base-unit numbers with no
-    //    asset attached, so comparing them against a token with different
-    //    decimals is meaningless — 1000 USDC is 1e9 base units, which reads as
-    //    dust against a wei-denominated ceiling. Until the policy grows
-    //    per-asset limits, non-native movements are refused rather than
-    //    measured against the wrong yardstick.
-    if (movement.token !== null) {
-      return {
-        verdict: "deny",
-        reason:
-          `token ${movement.token} cannot be moved: spending limits are denominated in the ` +
-          `native asset only. Per-asset caps are needed before token legs can run.`,
+    //    Caps are denominated in the asset they govern. 1000 USDC is 1e9 base
+    //    units, which reads as dust against a wei ceiling, so a token measured
+    //    against the native limits would slip through every one of them. A
+    //    token with no entry cannot move: guessing is worse than refusing.
+    let limits: { symbol: string; maxPerTransfer: string; maxPerDay: string };
+    if (movement.token === null) {
+      limits = {
+        symbol: "native",
+        maxPerTransfer: this.config.policy.maxPerTransfer,
+        maxPerDay: this.config.policy.maxPerDay,
       };
+    } else {
+      const asset = assetPolicyFor(this.config.policy, movement.token);
+      if (!asset) {
+        return {
+          verdict: "deny",
+          reason:
+            `token ${movement.token} has no entry in policy.assets, so no limit applies to ` +
+            `it. Add one with its decimals and caps before moving it.`,
+        };
+      }
+      if (asset.decimals !== movement.decimals) {
+        // A decimals mismatch silently rescales the amount by orders of
+        // magnitude, which is the most expensive kind of typo.
+        return {
+          verdict: "deny",
+          reason:
+            `${asset.symbol} is configured with ${asset.decimals} decimals but this movement ` +
+            `declares ${movement.decimals}`,
+        };
+      }
+      limits = asset;
     }
 
     // 3. Per-transfer ceiling.
-    const maxPerTransfer = BigInt(this.config.policy.maxPerTransfer);
+    const maxPerTransfer = BigInt(limits.maxPerTransfer);
     if (amount > maxPerTransfer) {
       return {
         verdict: "deny",
-        reason: `amount ${amount} exceeds maxPerTransfer ${maxPerTransfer}`,
+        reason: `amount ${amount} exceeds ${limits.symbol} maxPerTransfer ${maxPerTransfer}`,
       };
     }
 
@@ -100,13 +119,13 @@ export class PolicyEngine {
     //    unconfirmed transfer as "didn't happen" is how daily caps get breached.
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const movedToday = await this.ledger.movedSince(since, movement.token);
-    const maxPerDay = BigInt(this.config.policy.maxPerDay);
+    const maxPerDay = BigInt(limits.maxPerDay);
     if (movedToday + amount > maxPerDay) {
       return {
         verdict: "deny",
         reason:
-          `would move ${movedToday + amount} in 24h, over maxPerDay ${maxPerDay} ` +
-          `(${movedToday} already moved)`,
+          `would move ${movedToday + amount} ${limits.symbol} in 24h, over maxPerDay ` +
+          `${maxPerDay} (${movedToday} already moved)`,
       };
     }
 
@@ -125,7 +144,9 @@ export class PolicyEngine {
 
     // 6. Human escalation threshold — last, so the reason returned is the most
     //    actionable one rather than an approval prompt masking a hard failure.
-    const threshold = this.config.policy.requireApprovalAbove;
+    //    Only meaningful for the native asset it is denominated in.
+    const threshold =
+      movement.token === null ? this.config.policy.requireApprovalAbove : undefined;
     if (threshold !== undefined && amount > BigInt(threshold)) {
       return {
         verdict: "needs_approval",

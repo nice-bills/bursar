@@ -31,12 +31,31 @@ export class KeeperHubError extends Error {
   }
 }
 
+/**
+ * A transaction as a workflow execution reports it.
+ *
+ * Direct execution returns a bare hash string; workflow execution returns this
+ * richer record, with the receipt already verified. It is strictly better for
+ * an audit trail, so it is kept rather than flattened away.
+ */
+export interface TransactionRecord {
+  hash: string;
+  chainId?: number;
+  gasUsed?: string;
+  blockNumber?: number;
+  receiptStatus?: string;
+  verified?: boolean;
+  nodeName?: string;
+}
+
 export interface ExecutionResult {
   executionId: string;
   status: string;
   transactionHashes: string[];
   /** Explorer URLs, when the API supplies them. These go in the demo/report. */
   transactionLinks: string[];
+  /** Full receipt records, when the execution reports them. */
+  transactions: TransactionRecord[];
   /**
    * True when the API recognised our idempotency key and returned the original
    * execution instead of running a second one. Confirmed working against the
@@ -357,16 +376,44 @@ function normalizeExecution(body: unknown): ExecutionResult {
   const links = inner.transactionLinks ?? inner.transaction_links;
   const singleLink = inner.transactionLink ?? inner.transaction_link;
 
+  // Workflow executions report objects here, direct executions report strings.
+  // Stringifying an object yields "[object Object]", which is how this was
+  // first written into the ledger — a hash that identifies nothing.
+  const transactions: TransactionRecord[] = Array.isArray(hashes)
+    ? hashes.flatMap((entry) => {
+        if (typeof entry === "string") return [{ hash: entry }];
+        if (entry && typeof entry === "object") {
+          const record = entry as Record<string, unknown>;
+          const hash = record.hash ?? record.transactionHash;
+          if (typeof hash === "string") {
+            return [
+              {
+                hash,
+                chainId: typeof record.chainId === "number" ? record.chainId : undefined,
+                gasUsed: typeof record.gasUsed === "string" ? record.gasUsed : undefined,
+                blockNumber:
+                  typeof record.blockNumber === "number" ? record.blockNumber : undefined,
+                receiptStatus:
+                  typeof record.receiptStatus === "string" ? record.receiptStatus : undefined,
+                verified: typeof record.verified === "boolean" ? record.verified : undefined,
+                nodeName: typeof record.nodeName === "string" ? record.nodeName : undefined,
+              },
+            ];
+          }
+        }
+        return [];
+      })
+    : typeof single === "string"
+      ? [{ hash: single }]
+      : [];
+
   return {
     executionId: String(
       inner.executionId ?? inner.execution_id ?? inner.id ?? raw.executionId ?? "",
     ),
     status: String(inner.status ?? raw.status ?? "unknown"),
-    transactionHashes: Array.isArray(hashes)
-      ? hashes.map(String)
-      : typeof single === "string"
-        ? [single]
-        : [],
+    transactionHashes: transactions.map((t) => t.hash),
+    transactions,
     transactionLinks: Array.isArray(links)
       ? links.map(String)
       : typeof singleLink === "string"

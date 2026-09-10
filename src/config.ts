@@ -56,10 +56,56 @@ const yieldSchema = z.object({
   /** ERC-20 to supply, e.g. USDC on the yield chain. */
   asset: address,
   /**
+   * The lending pool. Must also be on policy.allowlist — supplying is value
+   * leaving the treasury, and the allowlist is what stops it going elsewhere.
+   */
+  poolAddress: address,
+  /**
    * Keep this much liquid in the treasury before depositing anything. Yield is
    * the last claim on the money, never the first.
    */
   buffer: baseUnits,
+});
+
+/**
+ * Limits for one non-native asset.
+ *
+ * Caps are meaningless without the asset they are denominated in: 1000 USDC is
+ * 1e9 base units, which reads as dust against a wei ceiling. Every token that
+ * may move needs its own entry, and anything unlisted is refused.
+ */
+const assetPolicySchema = z.object({
+  /** Human label for messages, e.g. "USDC". */
+  symbol: z.string().min(1),
+  decimals: z.number().int().min(0).max(36),
+  maxPerTransfer: baseUnits,
+  maxPerDay: baseUnits,
+});
+
+/**
+ * What to consolidate into the treasury, and when.
+ *
+ * Earnings arrive wherever the agent was paid — x402 settles USDC on Base, MPP
+ * settles on Tempo. Sweeping moves them somewhere the treasury actually
+ * governs, and `minAmount` keeps it from spending more in gas than it collects.
+ */
+const sweepAssetSchema = z.object({
+  /** null for the chain's native asset. */
+  token: address.nullable().default(null),
+  symbol: z.string().min(1),
+  decimals: z.number().int().min(0).max(36),
+  /**
+   * Do not sweep below this. For the native asset it doubles as the reserve
+   * left behind, since sweeping the gas away would strand the agent.
+   */
+  minAmount: baseUnits,
+});
+
+const sweepSchema = z.object({
+  chainId: z.number().int().positive(),
+  /** Defaults to the treasury address. */
+  destination: address.optional(),
+  assets: z.array(sweepAssetSchema).min(1),
 });
 
 const policySchema = z.object({
@@ -74,6 +120,12 @@ const policySchema = z.object({
   allowlist: z.array(address).default([]),
   /** Above this, Bursar refuses to act autonomously and asks for a human. */
   requireApprovalAbove: baseUnits.optional(),
+  /**
+   * Per-token limits, keyed by contract address. A token with no entry cannot
+   * move at all — the native caps do not apply to it and guessing is worse
+   * than refusing.
+   */
+  assets: z.record(address, assetPolicySchema).default({}),
 });
 
 export const configSchema = z
@@ -91,6 +143,7 @@ export const configSchema = z
     }),
     contributors: z.array(contributorSchema).min(1),
     float: z.array(floatSchema).default([]),
+    sweep: sweepSchema.optional(),
     yield: yieldSchema.optional(),
     policy: policySchema,
   })
@@ -134,13 +187,35 @@ export const configSchema = z
         message: "maxPerTransfer exceeds maxPerDay, so the daily cap can never bind",
       });
     }
+
+    for (const [token, asset] of Object.entries(cfg.policy.assets)) {
+      if (BigInt(asset.maxPerTransfer) > BigInt(asset.maxPerDay)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["policy", "assets", token],
+          message: `${asset.symbol}: maxPerTransfer exceeds maxPerDay, so the daily cap can never bind`,
+        });
+      }
+    }
   });
 
 export type BursarConfig = z.infer<typeof configSchema>;
 export type Contributor = z.infer<typeof contributorSchema>;
 export type FloatTarget = z.infer<typeof floatSchema>;
+export type SweepConfig = z.infer<typeof sweepSchema>;
+export type SweepAsset = z.infer<typeof sweepAssetSchema>;
 export type YieldConfig = z.infer<typeof yieldSchema>;
 export type Policy = z.infer<typeof policySchema>;
+export type AssetPolicy = z.infer<typeof assetPolicySchema>;
+
+/** Case-insensitive lookup of a token's limits. */
+export function assetPolicyFor(policy: Policy, token: string): AssetPolicy | undefined {
+  const wanted = token.toLowerCase();
+  for (const [addr, value] of Object.entries(policy.assets)) {
+    if (addr.toLowerCase() === wanted) return value;
+  }
+  return undefined;
+}
 
 export async function loadConfig(path = "bursar.config.json"): Promise<BursarConfig> {
   let text: string;

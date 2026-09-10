@@ -134,6 +134,154 @@ export function floatMonitorWorkflow(
   };
 }
 
+/** Minimal ERC-20 ABI for a balance read, stringified as the API requires. */
+const ERC20_BALANCE_ABI = JSON.stringify([
+  {
+    constant: true,
+    inputs: [{ name: "_owner", type: "address" }],
+    name: "balanceOf",
+    outputs: [{ name: "balance", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+]);
+
+/**
+ * Read an ERC-20 balance.
+ *
+ * `web3/check-balance` is native-only — it rejects a `token` field — so token
+ * balances go through a contract read instead.
+ */
+export function erc20BalanceWorkflow(
+  chainId: number,
+  token: string,
+  holder: string,
+  symbol: string,
+): WorkflowDefinition {
+  return {
+    name: `Bursar ${symbol} Balance — chain ${chainId}`,
+    description:
+      `Read the ${symbol} balance of ${holder} on chain ${chainId}. Authored by plugin-bursar.`,
+    nodes: [
+      {
+        id: "trigger-1",
+        type: "trigger",
+        data: {
+          type: "trigger",
+          label: "Manual",
+          config: { triggerType: "Manual" },
+          status: "idle",
+        },
+        position: { x: 0, y: 116 },
+      },
+      {
+        id: "step-1",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Read Token Balance",
+          config: {
+            actionType: WEB3.readContract,
+            network: String(chainId),
+            contractAddress: token,
+            abi: ERC20_BALANCE_ABI,
+            abiFunction: "balanceOf",
+            functionArgs: JSON.stringify([holder]),
+          },
+          status: "idle",
+          description: `balanceOf(${holder})`,
+        },
+        position: { x: 252, y: 116 },
+      },
+    ],
+    edges: [{ id: "e1", source: "trigger-1", target: "step-1" }],
+  };
+}
+
+/**
+ * Supply an asset to Aave v3.
+ *
+ * Uses KeeperHub's own aave-v3 plugin rather than hand-encoding a Pool call,
+ * so the pool address and ABI are the platform's problem rather than ours.
+ *
+ * Note the unit: this node takes `amount` in base units, while the direct
+ * `/execute/transfer` API takes a decimal string. Same platform, opposite
+ * conventions — Bursar holds base units internally and converts only where
+ * each surface demands it.
+ */
+export function aaveSupplyWorkflow(
+  chainId: number,
+  asset: string,
+  amountBaseUnits: string,
+  onBehalfOf: string,
+  symbol: string,
+): WorkflowDefinition {
+  return {
+    name: `Bursar Aave Supply ${symbol} — chain ${chainId}`,
+    description:
+      `Supply ${symbol} to Aave v3 on chain ${chainId} on behalf of ${onBehalfOf}. ` +
+      `Authored by plugin-bursar.`,
+    nodes: [
+      {
+        id: "trigger-1",
+        type: "trigger",
+        data: {
+          type: "trigger",
+          label: "Manual",
+          config: { triggerType: "Manual" },
+          status: "idle",
+        },
+        position: { x: 0, y: 116 },
+      },
+      {
+        id: "step-1",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Supply to Aave",
+          config: {
+            actionType: "aave-v3/supply",
+            network: String(chainId),
+            asset,
+            amount: amountBaseUnits,
+            onBehalfOf,
+          },
+          status: "idle",
+          description: `supply ${symbol} to the lending pool`,
+        },
+        position: { x: 252, y: 116 },
+      },
+    ],
+    edges: [{ id: "e1", source: "trigger-1", target: "step-1" }],
+  };
+}
+
+/** ERC-20 approve, stringified ABI as the contract-call API requires. */
+export const ERC20_APPROVE_ABI = JSON.stringify([
+  {
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "approve",
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+]);
+
+/** Output of a `web3/read-contract` balanceOf call, confirmed by execution. */
+export function readErc20Output(output: unknown): bigint | null {
+  const o = output as { result?: { balance?: unknown } } | null;
+  const raw = o?.result?.balance;
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  try {
+    return BigInt(raw);
+  } catch {
+    return null;
+  }
+}
+
 /** Output shape of a `web3/check-balance` node, confirmed by execution. */
 export interface BalanceReading {
   address: string;

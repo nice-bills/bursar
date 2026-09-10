@@ -306,7 +306,117 @@ export const checkFloatAction: Action = {
   ],
 };
 
+export const sweepEarningsAction: Action = {
+  name: "SWEEP_EARNINGS",
+  similes: ["COLLECT_EARNINGS", "CONSOLIDATE_FUNDS", "SWEEP", "COLLECT_REVENUE"],
+  description:
+    "Consolidate the agent's earnings into the treasury, moving each configured asset that " +
+    "is above its dust threshold. Use when asked to collect, sweep, or consolidate earnings.",
+
+  validate: async (runtime: IAgentRuntime): Promise<boolean> => {
+    const service = getService(runtime);
+    return service !== undefined && service.treasuryConfig.sweep !== undefined;
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    _message: Memory,
+    _state?: State,
+    _options?: unknown,
+    callback?: HandlerCallback,
+  ): Promise<ActionResult> => {
+    const service = getService(runtime);
+    if (!service) {
+      return { success: false, error: "Bursar treasury service is not running." };
+    }
+
+    const reports = await service.sweep();
+    if (reports.length === 0) {
+      const text = "No sweep is configured, so there is nothing to collect.";
+      await respond(callback, text);
+      return { success: true, text };
+    }
+
+    const text = [
+      "Sweeping earnings into the treasury:",
+      ...reports.map((r) => `  ${r.symbol}: ${r.note}`),
+    ].join("\n");
+
+    await respond(callback, text);
+    return {
+      success: reports.every((r) => r.balance !== null),
+      text,
+      data: { reports },
+    };
+  },
+
+  examples: [
+    [
+      { name: "{{user1}}", content: { text: "collect what we've earned" } },
+      {
+        name: "{{agent}}",
+        content: {
+          text: "Consolidating earnings into the treasury through KeeperHub.",
+          actions: ["SWEEP_EARNINGS"],
+        },
+      },
+    ],
+  ],
+};
+
+export const deployYieldAction: Action = {
+  name: "DEPLOY_SURPLUS",
+  similes: ["EARN_YIELD", "SUPPLY_TO_AAVE", "PUT_SURPLUS_TO_WORK", "DEPOSIT_SURPLUS"],
+  description:
+    "Supply treasury surplus above the configured buffer into Aave v3 to earn yield. Use " +
+    "when asked to put idle funds to work, earn yield, or deposit surplus.",
+
+  validate: async (runtime: IAgentRuntime): Promise<boolean> => {
+    const service = getService(runtime);
+    return service !== undefined && service.treasuryConfig.yield?.enabled === true;
+  },
+
+  handler: async (
+    runtime: IAgentRuntime,
+    _message: Memory,
+    _state?: State,
+    _options?: unknown,
+    callback?: HandlerCallback,
+  ): Promise<ActionResult> => {
+    const service = getService(runtime);
+    if (!service) {
+      return { success: false, error: "Bursar treasury service is not running." };
+    }
+
+    const report = await service.deployYield();
+    if (!report) {
+      const text = "Yield is not enabled, so there is nothing to deploy.";
+      await respond(callback, text);
+      return { success: true, text };
+    }
+
+    const text = `Surplus deployment — ${report.symbol}: ${report.note}`;
+    await respond(callback, text);
+    return { success: report.balance !== null, text, data: { report } };
+  },
+
+  examples: [
+    [
+      { name: "{{user1}}", content: { text: "put the idle funds to work" } },
+      {
+        name: "{{agent}}",
+        content: {
+          text: "Supplying the surplus above our buffer into Aave v3.",
+          actions: ["DEPLOY_SURPLUS"],
+        },
+      },
+    ],
+  ],
+};
+
 export const treasuryActions: Action[] = [
+  deployYieldAction,
+  sweepEarningsAction,
   payContributorsAction,
   checkFloatAction,
   reconcileTreasuryAction,

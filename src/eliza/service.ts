@@ -17,7 +17,15 @@ import { Ledger, dailyPeriod, type LedgerEntry } from "../ledger/store.js";
 import { PolicyEngine } from "../policy/engine.js";
 import { Executor, type MoveOutcome } from "../treasury/executor.js";
 import { formatUnits, NATIVE_DECIMALS } from "../units.js";
-import { floatMonitorWorkflow, readBalanceOutput } from "../treasury/workflows.js";
+import {
+  floatMonitorWorkflow,
+  readBalanceOutput,
+  erc20BalanceWorkflow,
+  readErc20Output,
+  aaveSupplyWorkflow,
+  ERC20_APPROVE_ABI,
+} from "../treasury/workflows.js";
+import { assetPolicyFor } from "../config.js";
 
 /** Settings arrive loosely typed; every value we read is a string or absent. */
 function setting(runtime: IAgentRuntime, key: string): string | undefined {
@@ -25,6 +33,25 @@ function setting(runtime: IAgentRuntime, key: string): string | undefined {
   return value === undefined || value === null ? undefined : String(value);
 }
 
+
+export interface SweepReport {
+  symbol: string;
+  token: string | null;
+  /** Base units held before the sweep, or null when the read failed. */
+  balance: string | null;
+  /** Base units actually moved, or null when nothing moved. */
+  swept: string | null;
+  note: string;
+}
+
+export interface YieldReport {
+  symbol: string;
+  asset: string;
+  /** Base units held, or null when the read failed. */
+  balance: string | null;
+  supplied: string | null;
+  note: string;
+}
 
 export interface FloatReport {
   chainId: number;
@@ -233,6 +260,267 @@ export class BursarService extends Service {
     }
     const created = await this.client.createWorkflow(workflow, `wf-${name}`);
     return String((created as { id?: string })?.id ?? "");
+  }
+
+  /**
+   * Consolidate earnings into the treasury.
+   *
+   * Balances are read through KeeperHub — native via the check-balance node,
+   * tokens via a contract read, since check-balance is native-only. The amount
+   * moved is capped by policy rather than clipped to it silently: sweeping the
+   * whole balance would routinely exceed the per-transfer ceiling and be
+   * refused, so we move as much as the ceiling allows and say what is left.
+   */
+  async sweep(period = dailyPeriod()): Promise<SweepReport[]> {
+    const sweepConfig = this.treasuryCfg.sweep;
+    if (!sweepConfig) return [];
+
+    const destination = sweepConfig.destination ?? this.treasuryCfg.treasury.address;
+    if (!destination) {
+      return [
+        {
+          symbol: "-",
+          token: null,
+          balance: null,
+          swept: null,
+          note: "no sweep destination and no treasury address configured",
+        },
+      ];
+    }
+
+    const holder = this.treasuryCfg.treasury.address ?? destination;
+    const reports: SweepReport[] = [];
+
+    for (const asset of sweepConfig.assets) {
+      const balance = await this.readBalance(sweepConfig.chainId, asset.token, holder, asset.symbol);
+      if (balance === null) {
+        reports.push({
+          symbol: asset.symbol,
+          token: asset.token,
+          balance: null,
+          swept: null,
+          note: "balance could not be read",
+        });
+        continue;
+      }
+
+      const floor = BigInt(asset.minAmount);
+      // Native: leave the floor behind as gas. Tokens: the floor is only a
+      // dust threshold, so the whole balance is fair game once it is cleared.
+      const available = asset.token === null ? balance - floor : balance;
+
+      if (balance < floor || available <= 0n) {
+        reports.push({
+          symbol: asset.symbol,
+          token: asset.token,
+          balance: balance.toString(),
+          swept: null,
+          note: `below the ${formatUnits(floor, asset.decimals)} ${asset.symbol} threshold`,
+        });
+        continue;
+      }
+
+      const ceiling =
+        asset.token === null
+          ? BigInt(this.treasuryCfg.policy.maxPerTransfer)
+          : BigInt(assetPolicyFor(this.treasuryCfg.policy, asset.token)?.maxPerTransfer ?? "0");
+
+      if (ceiling <= 0n) {
+        reports.push({
+          symbol: asset.symbol,
+          token: asset.token,
+          balance: balance.toString(),
+          swept: null,
+          note: `no policy.assets entry for ${asset.symbol}; refusing to move it`,
+        });
+        continue;
+      }
+
+      const amount = available < ceiling ? available : ceiling;
+      const outcome = await this.executor.move(
+        {
+          leg: "sweep",
+          chainId: sweepConfig.chainId,
+          to: destination,
+          amount: amount.toString(),
+          token: asset.token,
+          decimals: asset.decimals,
+          memo: `sweep ${asset.symbol} to treasury`,
+        },
+        period,
+      );
+
+      const remaining = available - amount;
+      reports.push({
+        symbol: asset.symbol,
+        token: asset.token,
+        balance: balance.toString(),
+        swept: outcome.result === "confirmed" ? amount.toString() : null,
+        note:
+          outcome.result === "confirmed"
+            ? `swept ${formatUnits(amount, asset.decimals)} ${asset.symbol}` +
+              (remaining > 0n
+                ? `, ${formatUnits(remaining, asset.decimals)} left by the per-transfer cap`
+                : "") +
+              ` — ${outcome.entry.transactionLinks?.[0] ?? outcome.transactionHashes[0] ?? ""}`
+            : outcome.result === "blocked"
+              ? `blocked: ${outcome.reason}`
+              : outcome.result === "skipped"
+                ? "already swept this period"
+                : `failed: ${outcome.error}`,
+      });
+    }
+
+    return reports;
+  }
+
+  /**
+   * Put surplus to work in Aave.
+   *
+   * Yield is the last claim on the money: the buffer stays liquid, and only
+   * what exceeds it is supplied. The supply runs through the executor like any
+   * other movement, so the pool has to be on the allowlist and the amount has
+   * to clear the asset's caps — depositing into a lending pool is still value
+   * leaving the treasury.
+   */
+  async deployYield(period = dailyPeriod()): Promise<YieldReport | null> {
+    const cfg = this.treasuryCfg.yield;
+    if (!cfg?.enabled) return null;
+
+    const holder = this.treasuryCfg.treasury.address;
+    if (!holder) {
+      return { symbol: "-", asset: "", balance: null, supplied: null, note: "no treasury address" };
+    }
+
+    const assetPolicy = assetPolicyFor(this.treasuryCfg.policy, cfg.asset);
+    if (!assetPolicy) {
+      return {
+        symbol: "-",
+        asset: cfg.asset,
+        balance: null,
+        supplied: null,
+        note: `no policy.assets entry for ${cfg.asset}; refusing to supply it`,
+      };
+    }
+
+    const balance = await this.readBalance(cfg.chainId, cfg.asset, holder, assetPolicy.symbol);
+    if (balance === null) {
+      return {
+        symbol: assetPolicy.symbol,
+        asset: cfg.asset,
+        balance: null,
+        supplied: null,
+        note: "balance could not be read",
+      };
+    }
+
+    const buffer = BigInt(cfg.buffer);
+    const surplus = balance - buffer;
+    if (surplus <= 0n) {
+      return {
+        symbol: assetPolicy.symbol,
+        asset: cfg.asset,
+        balance: balance.toString(),
+        supplied: null,
+        note: `no surplus above the ${formatUnits(buffer, assetPolicy.decimals)} buffer`,
+      };
+    }
+
+    const ceiling = BigInt(assetPolicy.maxPerTransfer);
+    const amount = surplus < ceiling ? surplus : ceiling;
+
+    // The pool must be able to pull the tokens before it can be supplied to.
+    // Approve is authority, not a transfer, so it is not a ledger movement —
+    // but it is scoped to exactly the amount about to be supplied rather than
+    // an unlimited allowance.
+    const pool = await this.aavePoolAddress(cfg.chainId);
+    await this.client.contractCall(
+      {
+        chainId: String(cfg.chainId),
+        contractAddress: cfg.asset,
+        abi: ERC20_APPROVE_ABI,
+        functionName: "approve",
+        functionArgs: JSON.stringify([pool, amount.toString()]),
+      },
+      `approve-${cfg.asset}-${amount}-${period}`,
+    );
+
+    const workflow = aaveSupplyWorkflow(
+      cfg.chainId,
+      cfg.asset,
+      amount.toString(),
+      holder,
+      assetPolicy.symbol,
+    );
+    const workflowId = await this.ensureWorkflow(workflow.name, workflow);
+
+    const outcome = await this.executor.move(
+      {
+        leg: "yield",
+        chainId: cfg.chainId,
+        to: pool,
+        amount: amount.toString(),
+        token: cfg.asset,
+        decimals: assetPolicy.decimals,
+        memo: `supply ${assetPolicy.symbol} to Aave v3`,
+      },
+      period,
+      undefined,
+      (idempotencyKey) => this.client.executeWorkflow(workflowId, {}, idempotencyKey),
+    );
+
+    return {
+      symbol: assetPolicy.symbol,
+      asset: cfg.asset,
+      balance: balance.toString(),
+      supplied: outcome.result === "confirmed" ? amount.toString() : null,
+      note:
+        outcome.result === "confirmed"
+          ? `supplied ${formatUnits(amount, assetPolicy.decimals)} ${assetPolicy.symbol} — ` +
+            `${outcome.entry.transactionLinks?.[0] ?? outcome.transactionHashes[0] ?? ""}`
+          : outcome.result === "blocked"
+            ? `blocked: ${outcome.reason}`
+            : outcome.result === "skipped"
+              ? "already supplied this period"
+              : `failed: ${outcome.error}`,
+    };
+  }
+
+  /** The Aave v3 Pool, read from the protocol's own address provider. */
+  private async aavePoolAddress(chainId: number): Promise<string> {
+    const configured = this.treasuryCfg.yield?.poolAddress;
+    if (configured) return configured;
+    throw new Error(
+      `No Aave pool address configured for chain ${chainId}. Set yield.poolAddress.`,
+    );
+  }
+
+  /** Balance in base units, read through KeeperHub. */
+  private async readBalance(
+    chainId: number,
+    token: string | null,
+    holder: string,
+    symbol: string,
+  ): Promise<bigint | null> {
+    if (token === null) {
+      const workflow = floatMonitorWorkflow({
+        chainId,
+        address: holder,
+        minBalance: "0",
+        targetBalance: "1",
+      });
+      const id = await this.ensureWorkflow(workflow.name, workflow);
+      const run = await this.client.executeWorkflow(id, {}, `bal-${id}-${Date.now()}`);
+      const final = await this.client.awaitExecution(run.executionId);
+      const reading = readBalanceOutput(final.output);
+      return reading ? BigInt(reading.balanceWei) : null;
+    }
+
+    const workflow = erc20BalanceWorkflow(chainId, token, holder, symbol);
+    const id = await this.ensureWorkflow(workflow.name, workflow);
+    const run = await this.client.executeWorkflow(id, {}, `bal-${id}-${Date.now()}`);
+    const final = await this.client.awaitExecution(run.executionId);
+    return readErc20Output(final.output);
   }
 
   /** Resolve every open intent against the chain. See Executor.reconcile. */

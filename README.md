@@ -33,6 +33,15 @@ Crash recovery, proven against the live API rather than asserted
 | Crash **after** submit | reconcile recovers the *original* transaction, no second transfer | [`0x179a1859…`](https://sepolia.etherscan.io/tx/0x179a18592959181196d6563a3f8f4f7e7f6d9250a2acecbe9679f34f291434c9) |
 | Balance below floor | the float's top-up branch executes | [`0x9717aff4…`](https://sepolia.etherscan.io/tx/0x9717aff48b014f40b9f72b9a8629097747fe345ba6c305f280d308515e73c945) |
 
+Every leg of the money loop, onchain:
+
+| Leg | What ran | Transaction |
+| --- | --- | --- |
+| Payout | 60/40 split to contributors | [`0xc74c0114…`](https://sepolia.etherscan.io/tx/0xc74c01140f72d5080a1071abaab64b8dfb1d95a37096bad4bfe8a5ca29a30257) |
+| Sweep | WETH consolidated, capped by policy | [`0xc3e8ab96…`](https://sepolia.etherscan.io/tx/0xc3e8ab9649ec5220e8df3ea73226b2244eca0df26a7e2fd7db83b2bbd87aeb5d) |
+| Yield | 3 LINK supplied to Aave v3 | [`0xb92cb3a3…`](https://sepolia.etherscan.io/tx/0xb92cb3a3f5b687b072159e60db3bfe97b23faa4da4a0125d07f67c3bcd7bb5c9) |
+| Float | top-up below the floor | [`0x9717aff4…`](https://sepolia.etherscan.io/tx/0x9717aff48b014f40b9f72b9a8629097747fe345ba6c305f280d308515e73c945) |
+
 And through a real ElizaOS agent, where a language model read the request in
 plain English, chose `PAY_CONTRIBUTORS`, and the payout executed
 (`npm run agent -- --execute`):
@@ -143,10 +152,17 @@ ledger, and idempotency, which a pure workflow would have bypassed.
 | Leg | Status |
 | --- | --- |
 | **Payout** — split revenue to contributors by share | Working, onchain |
+| **Sweep** — consolidate earnings into the treasury | Working, onchain |
+| **Yield** — surplus above the buffer into Aave v3 | Working, onchain |
 | **Float** — keep the operating wallet in gas | Working; balance read via workflow, decision in-process |
 | **Report** — statement with a hash per line | Working |
-| **Sweep** — collect x402/MPP earnings | Not built |
-| **Yield** — surplus to Aave V3 | Config schema only |
+
+Yield runs through the executor like every other movement, so the lending pool
+has to be on the allowlist and the amount has to clear the asset's own caps.
+Depositing into a pool is still value leaving the treasury, and routing it
+around the policy engine because it is "not really a transfer" is exactly how
+that kind of hole gets made. The approval is scoped to the amount being
+supplied rather than granted without limit.
 
 ## Setup
 
@@ -214,6 +230,20 @@ Documented behaviour that differs from the live API, all confirmed by probing:
    changed our architecture.
 9. `PATCH` followed immediately by `execute` can run the *previous* definition.
    Worth knowing before concluding a fix did not work — it cost us an hour.
+10. **Units differ between surfaces.** `/execute/transfer` takes a decimal
+    string; the `aave-v3/supply` workflow node takes base units. Same platform,
+    opposite conventions.
+11. **Execution payloads differ between surfaces too.** Direct execution returns
+    `transactionHash` as a string; workflow execution returns
+    `transactionHashes` as an array of objects carrying `hash`, `gasUsed`,
+    `blockNumber` and `receiptStatus`. Stringifying one as the other writes
+    `"[object Object]"` into your audit trail, which is how we first stored it.
+12. `web3/check-balance` is native-only — it rejects a `token` field. ERC-20
+    balances need `web3/read-contract` with `balanceOf`.
+
+And in Aave's Sepolia market, which cost a detour: `supplyCap == 0` means *no
+cap*, not "nothing may be supplied". DAI, USDC and USDT have all hit their 2B
+caps there and revert with `Error(51)`; LINK, WBTC and WETH are uncapped.
 
 And in ElizaOS itself, from booting it:
 
@@ -233,7 +263,6 @@ with `path`, `expected`, and `received`, which made the above discoverable.
 
 Stated plainly, since the submission form asks.
 
-- Sweep and yield legs are not implemented; the config schema anticipates them.
 - Testnet only so far. Nothing is chain-specific about the code, but the mainnet
   path has not been exercised.
 - The float decision runs in-process, so it does not survive the agent being

@@ -58,7 +58,7 @@ describe("plugin manifest", () => {
     assert.ok(bursarPlugin.description.length > 0);
     assert.deepEqual(bursarPlugin.services, [BursarService]);
     assert.deepEqual(bursarPlugin.providers, [treasuryProvider]);
-    assert.equal(bursarPlugin.actions?.length, 4);
+    assert.equal(bursarPlugin.actions?.length, 6);
   });
 
   test("every action has a description, validate, and handler", () => {

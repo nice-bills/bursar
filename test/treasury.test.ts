@@ -242,33 +242,133 @@ describe("PolicyEngine", () => {
   });
 });
 
-describe("PolicyEngine — assets it cannot yet measure", () => {
-  test("refuses ERC-20 movements rather than comparing them to a native cap", async () => {
-    // 1000 USDC is 1e9 base units, which would read as dust against a
-    // wei-denominated ceiling and slip through every limit.
+describe("PolicyEngine — per-asset limits", () => {
+  const TOKEN = `0x${"a".repeat(40)}`;
+
+  async function decide(
+    policyExtra: Record<string, unknown>,
+    movementExtra: Record<string, unknown>,
+  ) {
     const dir = await mkdtemp(join(tmpdir(), "bursar-token-"));
     try {
       const ledger = new Ledger(join(dir, "ledger.jsonl"));
       const config = configSchema.parse({
         treasury: { chainId: 11155111 },
         contributors,
-        policy: { maxPerTransfer: "1000000000000000000", maxPerDay: "2000000000000000000" },
+        policy: {
+          maxPerTransfer: "1000000000000000000",
+          maxPerDay: "2000000000000000000",
+          ...policyExtra,
+        },
       });
-
-      const decision = await new PolicyEngine(config, ledger).evaluate({
+      return await new PolicyEngine(config, ledger).evaluate({
         leg: "yield",
         chainId: 11155111,
         to: contributors[0]!.address,
-        amount: "1000000000",
-        token: `0x${"a".repeat(40)}`,
+        amount: "1000000",
+        token: TOKEN,
         decimals: 6,
         memo: "usdc",
+        ...movementExtra,
       });
-
-      assert.equal(decision.verdict, "deny");
-      assert.match((decision as { reason: string }).reason, /native asset only|per-asset/i);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  }
+
+  test("refuses a token with no configured limits", async () => {
+    // 1000 USDC is 1e9 base units, which would read as dust against a
+    // wei ceiling and slip through every native limit.
+    const decision = await decide({}, {});
+    assert.equal(decision.verdict, "deny");
+    assert.match((decision as { reason: string }).reason, /no entry in policy\.assets/);
+  });
+
+  test("allows a token that is configured and within its own caps", async () => {
+    const decision = await decide(
+      {
+        assets: {
+          [TOKEN]: {
+            symbol: "USDC",
+            decimals: 6,
+            maxPerTransfer: "10000000",
+            maxPerDay: "50000000",
+          },
+        },
+      },
+      {},
+    );
+    assert.equal(decision.verdict, "allow");
+  });
+
+  test("measures the token against its own ceiling, not the native one", async () => {
+    // 2 USDC against a 1 USDC cap must fail, even though 2e6 is far below
+    // the native 1e18 ceiling.
+    const decision = await decide(
+      {
+        assets: {
+          [TOKEN]: {
+            symbol: "USDC",
+            decimals: 6,
+            maxPerTransfer: "1000000",
+            maxPerDay: "50000000",
+          },
+        },
+      },
+      { amount: "2000000" },
+    );
+    assert.equal(decision.verdict, "deny");
+    assert.match((decision as { reason: string }).reason, /USDC maxPerTransfer/);
+  });
+
+  test("refuses a decimals mismatch rather than rescaling silently", async () => {
+    // Treating 6-decimal USDC as 18-decimal is a millionfold error.
+    const decision = await decide(
+      {
+        assets: {
+          [TOKEN]: {
+            symbol: "USDC",
+            decimals: 6,
+            maxPerTransfer: "10000000",
+            maxPerDay: "50000000",
+          },
+        },
+      },
+      { decimals: 18 },
+    );
+    assert.equal(decision.verdict, "deny");
+    assert.match((decision as { reason: string }).reason, /decimals/);
+  });
+
+  test("matches the token address case-insensitively", async () => {
+    const decision = await decide(
+      {
+        assets: {
+          [TOKEN.toUpperCase().replace("0X", "0x")]: {
+            symbol: "USDC",
+            decimals: 6,
+            maxPerTransfer: "10000000",
+            maxPerDay: "50000000",
+          },
+        },
+      },
+      {},
+    );
+    assert.equal(decision.verdict, "allow");
+  });
+
+  test("rejects an asset whose per-transfer cap exceeds its daily cap", () => {
+    const result = configSchema.safeParse({
+      treasury: { chainId: 1 },
+      contributors,
+      policy: {
+        maxPerTransfer: "100",
+        maxPerDay: "1000",
+        assets: {
+          [TOKEN]: { symbol: "USDC", decimals: 6, maxPerTransfer: "500", maxPerDay: "100" },
+        },
+      },
+    });
+    assert.equal(result.success, false);
   });
 });

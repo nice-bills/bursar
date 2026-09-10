@@ -32,6 +32,7 @@ function slowClient(delayMs = 25): { client: KeeperHubClient; calls: () => numbe
         status: "completed",
         transactionHashes: [`0x${key.slice(-8)}`],
         transactionLinks: [],
+        transactions: [{ hash: `0x${key.slice(-8)}` }],
         idempotentReplay: false,
         output: null,
         raw: {},
