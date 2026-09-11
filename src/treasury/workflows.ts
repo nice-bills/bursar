@@ -161,54 +161,6 @@ export function gasFloatWorkflow(
   };
 }
 
-export function floatMonitorWorkflow(
-  float: FloatTarget & { address: string },
-  cron = "0 * * * *",
-): WorkflowDefinition {
-  const network = String(float.chainId);
-  const floorLabel = formatUnits(BigInt(float.minBalance), NATIVE_DECIMALS);
-
-  return {
-    name: `Bursar Float Monitor — chain ${float.chainId}`,
-    description:
-      `Read the agent's operating balance on chain ${float.chainId} every hour. ` +
-      `Bursar compares it against the ${floorLabel} floor and tops up when needed. ` +
-      `Authored by plugin-bursar.`,
-
-    nodes: [
-      {
-        id: "trigger-1",
-        type: "trigger",
-        data: {
-          type: "trigger",
-          label: "Hourly",
-          config: { triggerType: "Schedule", scheduleCron: cron, scheduleTimezone: "UTC" },
-          status: "idle",
-        },
-        position: { x: 0, y: 116 },
-      },
-      {
-        id: "step-1",
-        type: "action",
-        data: {
-          type: "action",
-          label: "Read Operating Balance",
-          config: {
-            actionType: WEB3.checkBalance,
-            network,
-            address: float.address,
-          },
-          status: "idle",
-          description: "Native balance of the wallet the agent spends gas from",
-        },
-        position: { x: 252, y: 116 },
-      },
-    ],
-
-    edges: [{ id: "e1", source: "trigger-1", target: "step-1" }],
-  };
-}
-
 /** Short address tag, so workflows for different holders get different names. */
 function tag(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-4)}`;
@@ -217,7 +169,7 @@ function tag(address: string): string {
 /**
  * Read a native balance on demand.
  *
- * Deliberately separate from the scheduled float monitor. Workflows are
+ * Deliberately separate from the gas keeper. Workflows are
  * upserted by name, so sharing one would mean a sweep's balance read silently
  * rewriting the float keeper's trigger — and it would have to invent threshold
  * values it does not have to satisfy the shape.

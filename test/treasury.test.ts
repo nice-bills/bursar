@@ -372,3 +372,112 @@ describe("PolicyEngine — per-asset limits", () => {
     assert.equal(result.success, false);
   });
 });
+
+describe("PolicyEngine — the platform's cap is the one that binds", () => {
+  const contributor = contributors[0]!;
+
+  async function decide(
+    remaining: bigint,
+    amount: string,
+    localMaxPerDay = "1000000000000000000",
+  ) {
+    const dir = await mkdtemp(join(tmpdir(), "bursar-budget-"));
+    try {
+      const ledger = new Ledger(join(dir, "ledger.jsonl"));
+      const config = configSchema.parse({
+        treasury: { chainId: 11155111 },
+        contributors,
+        policy: { maxPerTransfer: "1000000000000000000", maxPerDay: localMaxPerDay },
+      });
+      const engine = new PolicyEngine(config, ledger, async () => ({
+        effectiveDailyCapWei: 20000000000000000n,
+        dailyUsedWei: 20000000000000000n - remaining,
+        remainingWei: remaining,
+        usingDefaultCap: true,
+      }));
+      return await engine.evaluate({
+        leg: "payout",
+        chainId: 11155111,
+        to: contributor.address,
+        amount,
+        token: null,
+        decimals: 18,
+        memo: "budget test",
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("refuses what the platform will not honour, even when local policy allows it", async () => {
+    // The local ceiling says 1 ETH; KeeperHub has 0.001 left today. A movement
+    // that passes every local check and then fails at the API is worse than
+    // one refused here, because the ledger never learns which it was.
+    const decision = await decide(1000000000000000n, "500000000000000000");
+    assert.equal(decision.verdict, "deny");
+    assert.match((decision as { reason: string }).reason, /KeeperHub|daily cap/i);
+  });
+
+  test("says how much is actually left, not just that it refused", async () => {
+    const decision = await decide(1000000000000000n, "500000000000000000");
+    assert.match((decision as { reason: string }).reason, /1000000000000000/);
+  });
+
+  test("allows a movement that fits inside the remaining platform budget", async () => {
+    const decision = await decide(10000000000000000n, "1000000000000000");
+    assert.equal(decision.verdict, "allow");
+  });
+
+  test("still works with no reader, so it runs offline and in tests", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bursar-budget-"));
+    try {
+      const ledger = new Ledger(join(dir, "ledger.jsonl"));
+      const config = configSchema.parse({
+        treasury: { chainId: 11155111 },
+        contributors,
+        policy: { maxPerTransfer: "1000", maxPerDay: "2000" },
+      });
+      const decision = await new PolicyEngine(config, ledger).evaluate({
+        leg: "payout",
+        chainId: 11155111,
+        to: contributor.address,
+        amount: "500",
+        token: null,
+        decimals: 18,
+        memo: "offline",
+      });
+      assert.equal(decision.verdict, "allow");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a reader that throws does not take the treasury down", async () => {
+    // Losing sight of the platform's budget is a reason to fall back to local
+    // limits, not a reason to stop paying anyone.
+    const dir = await mkdtemp(join(tmpdir(), "bursar-budget-"));
+    try {
+      const ledger = new Ledger(join(dir, "ledger.jsonl"));
+      const config = configSchema.parse({
+        treasury: { chainId: 11155111 },
+        contributors,
+        policy: { maxPerTransfer: "1000", maxPerDay: "2000" },
+      });
+      const engine = new PolicyEngine(config, ledger, async () => {
+        throw new Error("MCP unreachable");
+      });
+      const decision = await engine.evaluate({
+        leg: "payout",
+        chainId: 11155111,
+        to: contributor.address,
+        amount: "500",
+        token: null,
+        decimals: 18,
+        memo: "degraded",
+      });
+      assert.equal(decision.verdict, "allow");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

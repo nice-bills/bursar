@@ -10,7 +10,7 @@ import { treasuryProvider } from "../src/eliza/provider.js";
 import { payContributorsAction, reconcileTreasuryAction } from "../src/eliza/actions.js";
 import { createStandaloneRuntime, userMessage, emptyState } from "../src/eliza/standalone.js";
 import {
-  floatMonitorWorkflow,
+  gasFloatWorkflow,
   nativeBalanceWorkflow,
   erc20BalanceWorkflow,
   readBalanceOutput,
@@ -182,45 +182,67 @@ describe("action gating", () => {
   });
 });
 
-describe("float monitor workflow", () => {
+describe("the gas keeper runs without the agent", () => {
   const float = CONFIG.float[0]!;
 
-  test("uses the action type the platform validator actually accepts", () => {
-    const wf = floatMonitorWorkflow(float);
-    const types = wf.nodes.map((n) => n.data.config.actionType).filter(Boolean);
-    assert.ok(types.includes("web3/check-balance"));
-    // The documented name is rejected as an unknown action type.
-    assert.ok(!types.includes("web3.getNativeBalance"));
-  });
-
-  test("reads the wallet the agent actually spends gas from", () => {
-    const wf = floatMonitorWorkflow(float);
-    const node = wf.nodes.find((n) => n.data.config.actionType === "web3/check-balance");
-    assert.equal(node?.data.config.address, float.address);
-    assert.equal(node?.data.config.network, String(float.chainId));
-  });
-
-  test("carries no transfer node, so the workflow itself can never move value", () => {
-    // The comparison cannot run on-platform (a Condition node cannot read a
-    // web3/check-balance output), so the decision lives in checkFloat().
-    // A transfer node here would fire unconditionally.
-    const wf = floatMonitorWorkflow(float);
+  test("reads, compares and tops up entirely on the platform", () => {
+    // The whole point: a crashed agent cannot notice it has run out of gas, so
+    // the decision has to live on KeeperHub's schedule, not in our process.
+    const wf = gasFloatWorkflow(float);
     const types = wf.nodes.map((n) => n.data.config.actionType);
-    assert.ok(!types.includes("web3/transfer-funds"), "monitor must be read-only");
+    assert.ok(types.includes("web3/check-balance"), "must read the balance");
+    assert.ok(types.includes("Condition"), "must decide on the platform");
+    assert.ok(types.includes("web3/transfer-funds"), "must be able to act");
   });
 
-  test("is a connected graph", () => {
-    const wf = floatMonitorWorkflow(float);
-    const targets = new Set(wf.edges.map((e) => e.target));
-    for (const node of wf.nodes) {
-      if (node.type === "trigger") continue;
-      assert.ok(targets.has(node.id), `node ${node.id} is orphaned`);
-    }
+  test("fires on a schedule rather than waiting to be asked", () => {
+    const trigger = gasFloatWorkflow(float).nodes.find((n) => n.type === "trigger");
+    assert.equal(trigger?.data.config.triggerType, "Schedule");
+    assert.ok(trigger?.data.config.scheduleCron, "a schedule needs a cron");
+  });
+
+  test("uses the documented Condition shape, not a top-level group", () => {
+    // A `group` key passes validation and then leaves the reference unresolved
+    // at execution, which looks like a broken template resolver.
+    const gate = gasFloatWorkflow(float).nodes.find(
+      (n) => n.data.config.actionType === "Condition",
+    );
+    assert.ok(gate, "the keeper needs its gate");
+    assert.equal(typeof gate?.data.config.condition, "string");
+    assert.equal(gate?.data.config.group, undefined, "`group` is not in the schema");
+  });
+
+  test("compares on balanceWei so the gate is integer arithmetic", () => {
+    const gate = gasFloatWorkflow(float).nodes.find(
+      (n) => n.data.config.actionType === "Condition",
+    );
+    const condition = String(gate?.data.config.condition);
+    assert.match(condition, /balanceWei/, "comparing decimal strings compares lexically");
+    assert.match(condition, new RegExp(float.minBalance), "must compare against the floor");
+  });
+
+  test("tops up only on the true branch", () => {
+    // Without the handle the transfer runs whatever the balance is.
+    const wf = gasFloatWorkflow(float);
+    const gate = wf.nodes.find((n) => n.data.config.actionType === "Condition")!;
+    const topUp = wf.nodes.find((n) => n.data.config.actionType === "web3/transfer-funds")!;
+    const edge = wf.edges.find((e) => e.source === gate.id && e.target === topUp.id);
+    assert.ok(edge, "the gate must feed the top-up");
+    assert.equal(edge?.sourceHandle, "true");
+  });
+
+  test("tops up a fixed amount, so a run cannot chase its own effect", () => {
+    const topUp = gasFloatWorkflow(float).nodes.find(
+      (n) => n.data.config.actionType === "web3/transfer-funds",
+    );
+    // target - min = 0.05 - 0.01, decided at authoring time.
+    assert.equal(topUp?.data.config.amount, "0.04");
+    assert.equal(topUp?.data.config.recipientAddress, float.address);
   });
 
   test("names itself stably, so re-authoring updates instead of duplicating", () => {
-    assert.equal(floatMonitorWorkflow(float).name, floatMonitorWorkflow(float).name);
-    assert.match(floatMonitorWorkflow(float).name, /^Bursar /);
+    assert.equal(gasFloatWorkflow(float).name, gasFloatWorkflow(float).name);
+    assert.match(gasFloatWorkflow(float).name, /^Bursar /);
   });
 });
 
@@ -249,18 +271,18 @@ describe("readBalanceOutput", () => {
 describe("workflow naming keeps distinct concerns apart", () => {
   const float = CONFIG.float[0]!;
 
-  test("the on-demand balance read does not collide with the scheduled float monitor", () => {
+  test("the on-demand balance read does not collide with the gas keeper", () => {
     // Workflows are upserted by name. Sharing one would mean a sweep's balance
     // read silently rewriting the float keeper's schedule.
-    const monitor = floatMonitorWorkflow(float);
+    const keeper = gasFloatWorkflow(float);
     const onDemand = nativeBalanceWorkflow(float.chainId, float.address);
-    assert.notEqual(monitor.name, onDemand.name);
+    assert.notEqual(keeper.name, onDemand.name);
   });
 
-  test("the scheduled monitor keeps its schedule; the on-demand read is manual", () => {
-    const monitor = floatMonitorWorkflow(float);
+  test("the keeper keeps its schedule; the on-demand read is manual", () => {
+    const keeper = gasFloatWorkflow(float);
     const onDemand = nativeBalanceWorkflow(float.chainId, float.address);
-    assert.equal(monitor.nodes[0]?.data.config.triggerType, "Schedule");
+    assert.equal(keeper.nodes[0]?.data.config.triggerType, "Schedule");
     assert.equal(onDemand.nodes[0]?.data.config.triggerType, "Manual");
   });
 

@@ -15,6 +15,7 @@ import { Service, type IAgentRuntime } from "@elizaos/core";
 
 import { loadConfig, splitByShares, type BursarConfig } from "../config.js";
 import { KeeperHubClient } from "../keeperhub/client.js";
+import { KeeperHubMcp } from "../keeperhub/mcp.js";
 import { Ledger, dailyPeriod, type LedgerEntry } from "../ledger/store.js";
 import { PolicyEngine } from "../policy/engine.js";
 import { Executor, type MoveOutcome } from "../treasury/executor.js";
@@ -87,6 +88,7 @@ export class BursarService extends Service {
   private ledger!: Ledger;
   private executor!: Executor;
   private treasuryCfg!: BursarConfig;
+  private mcp!: KeeperHubMcp;
 
   static override async start(runtime: IAgentRuntime): Promise<BursarService> {
     const service = new BursarService(runtime);
@@ -116,10 +118,17 @@ export class BursarService extends Service {
     this.ledger = new Ledger(ledgerPath);
     // One writer per ledger file. Fails loudly if another process holds it.
     await this.ledger.acquire();
+
+    // The platform's cap is the one that actually binds. Without this reader
+    // the policy engine enforces only the local ceiling, which can sit above
+    // what KeeperHub will honour — movements then pass every local check and
+    // fail at the API for a reason the engine never saw.
+    this.mcp = new KeeperHubMcp(apiKey, setting(runtime, "KEEPERHUB_MCP_URL"));
+
     this.executor = new Executor(
       this.client,
       this.ledger,
-      new PolicyEngine(this.treasuryCfg, this.ledger),
+      new PolicyEngine(this.treasuryCfg, this.ledger, () => this.mcp.getSpendingLimits()),
       this.treasuryCfg,
     );
   }

@@ -20,7 +20,7 @@ import { Ledger, dailyPeriod } from "../src/ledger/store.js";
 import { PolicyEngine } from "../src/policy/engine.js";
 import { Executor } from "../src/treasury/executor.js";
 import { NATIVE_DECIMALS, formatUnits } from "../src/units.js";
-import { floatMonitorWorkflow, readBalanceOutput } from "../src/treasury/workflows.js";
+import { nativeBalanceWorkflow, readBalanceOutput } from "../src/treasury/workflows.js";
 
 const EXECUTE = process.argv.includes("--execute");
 
@@ -260,7 +260,7 @@ async function main(): Promise<void> {
       // Upsert rather than create. Creating with a fresh key every run left
       // six identical "Bursar Float Monitor" workflows on the account before
       // this was caught.
-      const workflow = floatMonitorWorkflow(floatTarget);
+      const workflow = nativeBalanceWorkflow(floatTarget.chainId, floatTarget.address);
       const existing = await client.listWorkflows();
       const rows = (Array.isArray(existing) ? existing : []) as Array<{ id: string; name: string }>;
       const found = rows.find((r) => r.name === workflow.name);

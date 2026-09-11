@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 
 import { loadConfig } from "../src/config.js";
 import { KeeperHubClient, KeeperHubError } from "../src/keeperhub/client.js";
-import { floatMonitorWorkflow } from "../src/treasury/workflows.js";
+import { gasFloatWorkflow } from "../src/treasury/workflows.js";
 
 const CREATE = process.argv.includes("--create");
 const RUN = process.argv.includes("--run");
@@ -35,7 +35,7 @@ async function main(): Promise<void> {
   const byName = new Map(rows.map((r) => [r.name, r.id]));
 
   for (const float of config.float) {
-    const workflow = floatMonitorWorkflow(float);
+    const workflow = gasFloatWorkflow(float);
     console.log(`\n=== ${workflow.name} ===`);
     console.log(workflow.description);
     console.log(JSON.stringify(workflow, null, 2));
