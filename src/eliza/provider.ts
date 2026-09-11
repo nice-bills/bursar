@@ -54,10 +54,15 @@ export const treasuryProvider: Provider = {
       );
       const perDay = formatUnits(BigInt(config.policy.maxPerDay), NATIVE_DECIMALS);
 
+      const routing = service.payoutRouting();
       const lines = [
         `Treasury chain: ${config.treasury.chainId}.`,
         `Revenue splits: ${splits}.`,
         `Spending limits: ${perTransfer} per transfer, ${perDay} per rolling 24h.`,
+        `Payouts settle on chain ${routing.chainId}` +
+          (routing.privateMempool
+            ? " with MEV-protected submission."
+            : " without private routing on this chain."),
       ];
 
       if (open.length > 0) {

@@ -1,0 +1,12 @@
+{
+  "$comment": "Publish build: src only. The root config also covers scripts and tests so they get typechecked, but neither belongs in the package.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts", "types/**/*.d.ts"]
+}

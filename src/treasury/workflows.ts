@@ -134,6 +134,46 @@ export function floatMonitorWorkflow(
   };
 }
 
+/** Short address tag, so workflows for different holders get different names. */
+function tag(address: string): string {
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+/**
+ * Read a native balance on demand.
+ *
+ * Deliberately separate from the scheduled float monitor. Workflows are
+ * upserted by name, so sharing one would mean a sweep's balance read silently
+ * rewriting the float keeper's trigger — and it would have to invent threshold
+ * values it does not have to satisfy the shape.
+ */
+export function nativeBalanceWorkflow(chainId: number, holder: string): WorkflowDefinition {
+  return {
+    name: `Bursar Native Balance ${tag(holder)} — chain ${chainId}`,
+    description: `Read the native balance of ${holder} on chain ${chainId}. Authored by plugin-bursar.`,
+    nodes: [
+      {
+        id: "trigger-1",
+        type: "trigger",
+        data: { type: "trigger", label: "Manual", config: { triggerType: "Manual" }, status: "idle" },
+        position: { x: 0, y: 116 },
+      },
+      {
+        id: "step-1",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Read Native Balance",
+          config: { actionType: WEB3.checkBalance, network: String(chainId), address: holder },
+          status: "idle",
+        },
+        position: { x: 252, y: 116 },
+      },
+    ],
+    edges: [{ id: "e1", source: "trigger-1", target: "step-1" }],
+  };
+}
+
 /** Minimal ERC-20 ABI for a balance read, stringified as the API requires. */
 const ERC20_BALANCE_ABI = JSON.stringify([
   {
@@ -159,7 +199,7 @@ export function erc20BalanceWorkflow(
   symbol: string,
 ): WorkflowDefinition {
   return {
-    name: `Bursar ${symbol} Balance — chain ${chainId}`,
+    name: `Bursar ${symbol} Balance ${tag(holder)} — chain ${chainId}`,
     description:
       `Read the ${symbol} balance of ${holder} on chain ${chainId}. Authored by plugin-bursar.`,
     nodes: [

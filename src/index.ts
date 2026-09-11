@@ -56,4 +56,26 @@ export { PolicyEngine, type Movement, type Decision } from "./policy/engine.js";
 export { Ledger, type LedgerEntry } from "./ledger/store.js";
 export { KeeperHubClient, KeeperHubError } from "./keeperhub/client.js";
 export { loadConfig, splitByShares, type BursarConfig } from "./config.js";
-export { formatUnits, parseUnits, NATIVE_DECIMALS } from "./units.js";
+export { formatUnits, parseUnits, NATIVE_DECIMALS, UnitsError } from "./units.js";
+export { extractAmount, type AmountResult } from "./eliza/amount.js";
+
+// Individual actions, so an integrator can mount a subset — a read-only agent
+// that reports but never pays is a reasonable thing to want.
+export {
+  payContributorsAction,
+  sweepEarningsAction,
+  deployYieldAction,
+  checkFloatAction,
+  reconcileTreasuryAction,
+  treasuryReportAction,
+} from "./eliza/actions.js";
+
+/**
+ * Prove a treasury config moves money before wiring it into a live agent.
+ *
+ * `createStandaloneRuntime` implements just the runtime surface the plugin
+ * touches, so the service, provider and actions can be driven from a script or
+ * a test. The stub model plugins let that run with no model provider key.
+ */
+export { createStandaloneRuntime, userMessage, emptyState } from "./eliza/standalone.js";
+export { stubModelPlugin, embeddingStubPlugin } from "./eliza/stub-model.js";

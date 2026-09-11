@@ -9,7 +9,12 @@ import { BursarService } from "../src/eliza/service.js";
 import { treasuryProvider } from "../src/eliza/provider.js";
 import { payContributorsAction, reconcileTreasuryAction } from "../src/eliza/actions.js";
 import { createStandaloneRuntime, userMessage, emptyState } from "../src/eliza/standalone.js";
-import { floatMonitorWorkflow, readBalanceOutput } from "../src/treasury/workflows.js";
+import {
+  floatMonitorWorkflow,
+  nativeBalanceWorkflow,
+  erc20BalanceWorkflow,
+  readBalanceOutput,
+} from "../src/treasury/workflows.js";
 
 const CONFIG = {
   treasury: { chainId: 11155111, address: `0x${"8".repeat(40)}` },
@@ -238,5 +243,130 @@ describe("readBalanceOutput", () => {
     assert.equal(readBalanceOutput(null), null);
     assert.equal(readBalanceOutput({ balance: "1.0" }), null);
     assert.equal(readBalanceOutput({ balanceWei: 123 }), null);
+  });
+});
+
+describe("workflow naming keeps distinct concerns apart", () => {
+  const float = CONFIG.float[0]!;
+
+  test("the on-demand balance read does not collide with the scheduled float monitor", () => {
+    // Workflows are upserted by name. Sharing one would mean a sweep's balance
+    // read silently rewriting the float keeper's schedule.
+    const monitor = floatMonitorWorkflow(float);
+    const onDemand = nativeBalanceWorkflow(float.chainId, float.address);
+    assert.notEqual(monitor.name, onDemand.name);
+  });
+
+  test("the scheduled monitor keeps its schedule; the on-demand read is manual", () => {
+    const monitor = floatMonitorWorkflow(float);
+    const onDemand = nativeBalanceWorkflow(float.chainId, float.address);
+    assert.equal(monitor.nodes[0]?.data.config.triggerType, "Schedule");
+    assert.equal(onDemand.nodes[0]?.data.config.triggerType, "Manual");
+  });
+
+  test("balance workflows are scoped to the holder they read", () => {
+    const a = nativeBalanceWorkflow(11155111, `0x${"1".repeat(40)}`);
+    const b = nativeBalanceWorkflow(11155111, `0x${"2".repeat(40)}`);
+    assert.notEqual(a.name, b.name, "two holders must not share one workflow");
+
+    const t1 = erc20BalanceWorkflow(11155111, `0x${"a".repeat(40)}`, `0x${"1".repeat(40)}`, "USDC");
+    const t2 = erc20BalanceWorkflow(11155111, `0x${"a".repeat(40)}`, `0x${"2".repeat(40)}`, "USDC");
+    assert.notEqual(t1.name, t2.name);
+  });
+});
+
+describe("sweep refuses a destination that is its own wallet", () => {
+  test("reports the no-op instead of burning gas and daily cap on a self-transfer", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bursar-selfsweep-"));
+    const configPath = join(dir, "bursar.config.json");
+    const wallet = `0x${"8".repeat(40)}`;
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...CONFIG,
+        treasury: { chainId: 11155111, address: wallet },
+        sweep: {
+          chainId: 11155111,
+          destination: wallet,
+          assets: [{ token: null, symbol: "ETH", decimals: 18, minAmount: "1" }],
+        },
+      }),
+      "utf8",
+    );
+
+    const ctx = createStandaloneRuntime({
+      settings: {
+        KEEPERHUB_API_KEY: "kh_test_key_not_used_for_network",
+        BURSAR_CONFIG_PATH: configPath,
+        BURSAR_LEDGER_PATH: join(dir, "ledger.jsonl"),
+      },
+    });
+
+    try {
+      const service = await ctx.startService(BursarService);
+      const reports = await service.sweep();
+      assert.equal(reports.length, 1);
+      assert.equal(reports[0]?.swept, null);
+      assert.match(reports[0]?.note ?? "", /own wallet|nothing to consolidate/i);
+    } finally {
+      await ctx.stopAll();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the public surface matches what the docs promise", () => {
+  test("everything the README and module docs tell integrators to import exists", async () => {
+    // standalone.ts claimed it was "exported from the package on purpose" while
+    // it was not reachable from the entry point. A doc that lies is worse than
+    // one that is missing, so the surface is asserted rather than described.
+    const api = await import("../src/index.js");
+    const promised = [
+      "bursarPlugin",
+      "BursarService",
+      "treasuryProvider",
+      "treasuryActions",
+      "createStandaloneRuntime",
+      "userMessage",
+      "emptyState",
+      "stubModelPlugin",
+      "embeddingStubPlugin",
+      "Executor",
+      "PolicyEngine",
+      "Ledger",
+      "KeeperHubClient",
+      "loadConfig",
+      "splitByShares",
+      "formatUnits",
+      "parseUnits",
+      "extractAmount",
+    ];
+    for (const name of promised) {
+      assert.ok(name in api, `${name} is documented but not exported`);
+    }
+  });
+
+  test("the default export is the plugin itself", async () => {
+    const api = await import("../src/index.js");
+    assert.equal(api.default, api.bursarPlugin);
+  });
+
+  test("every action exported individually is also in treasuryActions", async () => {
+    const api = await import("../src/index.js");
+    const individual = [
+      api.payContributorsAction,
+      api.sweepEarningsAction,
+      api.deployYieldAction,
+      api.checkFloatAction,
+      api.reconcileTreasuryAction,
+      api.treasuryReportAction,
+    ];
+    for (const action of individual) {
+      assert.ok(
+        api.treasuryActions.includes(action),
+        `${action.name} is exported but not registered on the plugin`,
+      );
+    }
+    assert.equal(individual.length, api.treasuryActions.length);
   });
 });

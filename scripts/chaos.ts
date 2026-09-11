@@ -257,9 +257,22 @@ async function main(): Promise<void> {
       const executor = new Executor(client, ledger, new PolicyEngine(raised, ledger), raised);
       const floatTarget = raised.float[0]!;
 
+      // Upsert rather than create. Creating with a fresh key every run left
+      // six identical "Bursar Float Monitor" workflows on the account before
+      // this was caught.
       const workflow = floatMonitorWorkflow(floatTarget);
-      const created = await client.createWorkflow(workflow, `chaos-float-${Date.now()}`);
-      const workflowId = String((created as { id?: string })?.id ?? "");
+      const existing = await client.listWorkflows();
+      const rows = (Array.isArray(existing) ? existing : []) as Array<{ id: string; name: string }>;
+      const found = rows.find((r) => r.name === workflow.name);
+      const workflowId = found
+        ? found.id
+        : String(
+            (
+              (await client.createWorkflow(workflow, `chaos-float-${Date.now()}`)) as {
+                id?: string;
+              }
+            )?.id ?? "",
+          );
 
       const run = await client.executeWorkflow(workflowId, {}, `chaos-run-${Date.now()}`);
       const final = await client.awaitExecution(run.executionId);
@@ -285,12 +298,19 @@ async function main(): Promise<void> {
         `chaos-float-${Date.now()}`,
       );
 
-      check(outcome.result === "confirmed", "the top-up executed onchain");
+      // Report the outcome BEFORE asserting on it. check() throws, so putting
+      // the diagnostic after it means the one run that needs explaining is the
+      // one that never prints an explanation.
       if (outcome.result === "confirmed") {
         console.log(`    ${outcome.entry.transactionLinks?.[0] ?? outcome.transactionHashes[0]}`);
       } else if (outcome.result === "blocked") {
         console.log(`    blocked: ${outcome.reason}`);
+      } else if (outcome.result === "failed") {
+        console.log(`    failed: ${outcome.error}`);
+      } else {
+        console.log(`    ${outcome.result}: ${outcome.reason}`);
       }
+      check(outcome.result === "confirmed", "the top-up executed onchain");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

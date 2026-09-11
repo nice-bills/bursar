@@ -240,11 +240,6 @@ export class Ledger {
   }
 }
 
-/** Period key for intent derivation — collapses retries within the same hour. */
-export function hourlyPeriod(now = new Date()): string {
-  return now.toISOString().slice(0, 13); // YYYY-MM-DDTHH
-}
-
 /** Coarser period for legs that should run at most once a day. */
 export function dailyPeriod(now = new Date()): string {
   return now.toISOString().slice(0, 10); // YYYY-MM-DD

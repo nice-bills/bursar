@@ -8,6 +8,8 @@
  * if there is exactly one writer per agent.
  */
 
+import { createHash } from "node:crypto";
+
 import { Service, type IAgentRuntime } from "@elizaos/core";
 
 
@@ -19,6 +21,7 @@ import { Executor, type MoveOutcome } from "../treasury/executor.js";
 import { formatUnits, NATIVE_DECIMALS } from "../units.js";
 import {
   floatMonitorWorkflow,
+  nativeBalanceWorkflow,
   readBalanceOutput,
   erc20BalanceWorkflow,
   readErc20Output,
@@ -129,6 +132,14 @@ export class BursarService extends Service {
 
   get treasuryConfig(): BursarConfig {
     return this.treasuryCfg;
+  }
+
+  /** Chain payouts leave on, and whether it gets MEV-protected submission. */
+  payoutRouting(): { chainId: number; privateMempool: boolean } {
+    return {
+      chainId: this.executor.payoutChain(),
+      privateMempool: this.executor.payoutChainIsPrivate(),
+    };
   }
 
   /**
@@ -248,17 +259,30 @@ export class BursarService extends Service {
     return reports;
   }
 
-  /** Author the workflow if absent, update it if present. Never duplicates. */
+  /**
+   * Author the workflow if absent, update it if present. Never duplicates.
+   *
+   * The idempotency key carries a hash of the definition, not just its name.
+   * A stable key would be indistinguishable from a replay, so an edited
+   * workflow could be answered from the original write and never actually
+   * applied — the failure mode being a keeper that silently keeps running the
+   * old logic.
+   */
   private async ensureWorkflow(name: string, workflow: unknown): Promise<string> {
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(workflow))
+      .digest("hex")
+      .slice(0, 16);
+
     const existing = await this.client.listWorkflows();
     const rows = (Array.isArray(existing) ? existing : []) as Array<{ id: string; name: string }>;
     const found = rows.find((r) => r.name === name);
 
     if (found) {
-      await this.client.updateWorkflow(found.id, workflow, `wf-${found.id}`);
+      await this.client.updateWorkflow(found.id, workflow, `wf-${found.id}-${fingerprint}`);
       return found.id;
     }
-    const created = await this.client.createWorkflow(workflow, `wf-${name}`);
+    const created = await this.client.createWorkflow(workflow, `wf-${fingerprint}`);
     return String((created as { id?: string })?.id ?? "");
   }
 
@@ -289,6 +313,24 @@ export class BursarService extends Service {
     }
 
     const holder = this.treasuryCfg.treasury.address ?? destination;
+
+    // Sweeping to yourself moves nothing, but it still burns gas and consumes
+    // the daily cap — so it is not harmless, it is a slow leak that also eats
+    // the budget a real payout needs.
+    if (holder.toLowerCase() === destination.toLowerCase()) {
+      return [
+        {
+          symbol: "-",
+          token: null,
+          balance: null,
+          swept: null,
+          note:
+            `sweep destination ${destination} is the treasury's own wallet, so there is ` +
+            `nothing to consolidate. Set sweep.destination to a different address.`,
+        },
+      ];
+    }
+
     const reports: SweepReport[] = [];
 
     for (const asset of sweepConfig.assets) {
@@ -503,12 +545,7 @@ export class BursarService extends Service {
     symbol: string,
   ): Promise<bigint | null> {
     if (token === null) {
-      const workflow = floatMonitorWorkflow({
-        chainId,
-        address: holder,
-        minBalance: "0",
-        targetBalance: "1",
-      });
+      const workflow = nativeBalanceWorkflow(chainId, holder);
       const id = await this.ensureWorkflow(workflow.name, workflow);
       const run = await this.client.executeWorkflow(id, {}, `bal-${id}-${Date.now()}`);
       const final = await this.client.awaitExecution(run.executionId);

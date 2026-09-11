@@ -38,7 +38,7 @@ Every leg of the money loop, onchain:
 | Leg | What ran | Transaction |
 | --- | --- | --- |
 | Payout | 60/40 split to contributors | [`0xc74c0114…`](https://sepolia.etherscan.io/tx/0xc74c01140f72d5080a1071abaab64b8dfb1d95a37096bad4bfe8a5ca29a30257) |
-| Sweep | WETH consolidated, capped by policy | [`0xc3e8ab96…`](https://sepolia.etherscan.io/tx/0xc3e8ab9649ec5220e8df3ea73226b2244eca0df26a7e2fd7db83b2bbd87aeb5d) |
+| Sweep | WETH consolidated to the treasury, capped by policy | [`0x14832bd5…`](https://sepolia.etherscan.io/tx/0x14832bd5cf9abe8faa7735280f3aa15b5aaec4c2005b760ce9a5584b4696d53e) |
 | Yield | 3 LINK supplied to Aave v3 | [`0xb92cb3a3…`](https://sepolia.etherscan.io/tx/0xb92cb3a3f5b687b072159e60db3bfe97b23faa4da4a0125d07f67c3bcd7bb5c9) |
 | Float | top-up below the floor | [`0x9717aff4…`](https://sepolia.etherscan.io/tx/0x9717aff48b014f40b9f72b9a8629097747fe345ba6c305f280d308515e73c945) |
 
@@ -121,6 +121,9 @@ process that dies between "money left" and "we wrote it down".
   nothing if the balance is wrong. Across *processes*, the ledger takes an
   advisory lock — with stale-holder takeover, because a treasury that cannot
   reconcile after a crash is worse than one that risks a rare concurrent write.
+- **A sweep to your own wallet is refused.** It moves nothing but still burns
+  gas and consumes the daily cap — a slow leak that also eats the budget a real
+  payout needs.
 - **Payouts go out on the chain that holds the money.** Preferring a
   private-mempool chain used to silently redirect them: a treasury funded on
   Base would pay out on Ethereum mainnet, where it holds nothing, so every

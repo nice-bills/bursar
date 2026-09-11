@@ -56,7 +56,7 @@
   },
   "sweep": {
     "chainId": 11155111,
-    "destination": "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9",
+    "destination": "0x069C76420DD98cAfa97cc1D349BC1cC708284032",
     "assets": [
       {
         "token": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
