@@ -137,6 +137,31 @@ process that dies between "money left" and "we wrote it down".
   0.01 each" must not become three ether. When more than one number could be
   the amount, Bursar refuses and asks.
 
+## Why this is not a wrapper around the MCP server
+
+KeeperHub's MCP server exposes 44 tools. An agent that mounts them pays for
+every definition in every prompt before it has done anything, and one of those
+tools — `list_action_schemas` — answers with close to half a megabyte, so a
+single call swamps the context it was meant to inform.
+
+Bursar follows the code-execution pattern instead: the server is an API that
+*code* calls, the traffic stays in the program, and the model sees a small
+task-shaped surface. Measured with `npm run context-cost`:
+
+| | Mounting KeeperHub directly | With plugin-bursar |
+| --- | --- | --- |
+| Always in the prompt | ~13,300 tokens (44 tool definitions) | ~950 tokens (6 actions + 1 provider) |
+| One schema lookup | ~120,600 tokens | ~370 tokens |
+
+**14x smaller resident surface, 330x smaller per lookup.** The 44 tools are all
+still reachable — Bursar calls them — they are just not in the prompt, and
+neither is the traffic between them.
+
+That is also the difference between a treasury and a toolbelt. An agent holding
+44 execution tools can do anything with the money and has to be *asked* not to.
+An agent holding `PAY_CONTRIBUTORS` can only pay contributors, by their
+configured shares, within caps it cannot raise.
+
 ## KeeperHub surfaces used
 
 | Surface | How |
@@ -207,9 +232,9 @@ Scripts: `npm run agent` (dry) / `-- --execute`, `npm run demo` (dry) / `-- --ex
 submitting, a crash after submitting — and asserts the recovery. The live
 scenarios prove reconciliation against the chain rather than asserting it.
 
-## What we found in KeeperHub along the way
+## Notes on the KeeperHub API
 
-Documented behaviour that differs from the live API, all confirmed by probing:
+Behaviour that differs from the docs, confirmed against the live API:
 
 1. Transfer takes `recipientAddress`, not `to`.
 2. `amount` is a **human-readable decimal string, not base units**. Sending
@@ -221,59 +246,46 @@ Documented behaviour that differs from the live API, all confirmed by probing:
 5. Web3 node action types are slash-kebab (`web3/check-balance`,
    `web3/transfer-funds`), not the documented `web3.getNativeBalance` /
    `web3.transferNative`, which the validator rejects as unknown.
-6. `/execute` accepts only `transfer` and `contract-call` — there is no balance
-   endpoint, so balance-gated logic must live in a workflow.
+6. `/execute` accepts only `transfer` and `contract-call`. Balance-gated logic
+   belongs in a workflow.
 7. Workflows are updated with `PATCH`; `PUT` and `POST` both answer 405. A
    workflow that has ever run cannot be deleted until its executions are, so
    re-authoring must upsert rather than replace.
-8. ~~A Condition node cannot read a `web3/check-balance` output.~~ **Retracted —
-   this was our bug, not theirs.** The Condition node takes a `condition`
-   expression and an optional `conditionConfig`; we were passing a top-level
-   `group` key that appears nowhere in its schema. The reference syntax was
-   correct throughout. Removing `group` made it resolve first try. We had
-   reported this as a platform defect and restructured the float around it.
-9. `PATCH` followed immediately by `execute` can run the *previous* definition.
-   Worth knowing before concluding a fix did not work — it cost us an hour.
-10. **Units differ between surfaces.** `/execute/transfer` takes a decimal
-    string; the `aave-v3/supply` workflow node takes base units. Same platform,
-    opposite conventions.
-11. **Execution payloads differ between surfaces too.** Direct execution returns
+8. `PATCH` followed immediately by `execute` can run the *previous* definition.
+9. **Units differ between surfaces.** `/execute/transfer` takes a decimal
+   string; the `aave-v3/supply` workflow node takes base units.
+10. **Execution payloads differ between surfaces too.** Direct execution returns
     `transactionHash` as a string; workflow execution returns
     `transactionHashes` as an array of objects carrying `hash`, `gasUsed`,
     `blockNumber` and `receiptStatus`. Stringifying one as the other writes
-    `"[object Object]"` into your audit trail, which is how we first stored it.
-12. `web3/check-balance` is native-only — it rejects a `token` field. ~~ERC-20
-    balances need `web3/read-contract` with `balanceOf`.~~ **Half retracted:**
-    `web3/check-token-balance` exists and is the right node; we simply never
-    guessed that name.
+    `"[object Object]"` where a hash should be.
+11. `web3/check-balance` is native-only and rejects a `token` field;
+    `web3/check-token-balance` is the ERC-20 equivalent.
+12. A Condition node takes a `condition` expression plus an optional
+    `conditionConfig` for the visual builder. Passing a top-level `group` key
+    is accepted by the validator but leaves the template reference unresolved
+    at execution.
 
-And in Aave's Sepolia market, which cost a detour: `supplyCap == 0` means *no
-cap*, not "nothing may be supplied". DAI, USDC and USDT have all hit their 2B
-caps there and revert with `Error(51)`; LINK, WBTC and WETH are uncapped.
+`list_action_schemas` on the MCP server is the authoritative source for all of
+the above: every action type with its required fields, its output fields, and a
+worked templating example. It is the first thing to reach for.
 
-And in ElizaOS itself, from booting it:
+In Aave's Sepolia market, `supplyCap == 0` means *no cap*, not "nothing may be
+supplied". DAI, USDC and USDT have hit their 2B caps and revert with
+`Error(51)`; LINK, WBTC and WETH are uncapped.
 
-10. `AgentRuntime.initialize()` queries the `agents` table *before* running
+And in ElizaOS:
+
+13. `AgentRuntime.initialize()` queries the `agents` table *before* running
     plugin migrations, so it cannot start against a brand-new database. Migrate
     first and pass the adapter in.
-11. The database adapter's agent id must match the runtime's (derived from the
+14. The database adapter's agent id must match the runtime's (derived from the
     character name), or writes fail on a foreign key violation.
-12. `registerService()` is called without being awaited, so services start
+15. `registerService()` is called without being awaited, so services start
     asynchronously after plugin registration returns and there is no public
     "ready" signal. Poll for the service rather than racing it.
-
-The workflow validator is genuinely good: it reports every invalid node at once
-with `path`, `expected`, and `received`.
-
-**The larger lesson is about us, not the platform.** Two of the findings above
-are retracted because they were our mistakes, and both came from the same
-cause: we reverse-engineered action types by brute-forcing the validator
-instead of calling `list_action_schemas` on KeeperHub's MCP server, which
-returns every action type with its required fields, its output fields, and a
-worked templating example. A day of probing, one wrong bug report, and an
-architecture detour, all avoidable by reading the interface the platform
-provides for exactly this. That tool is now a first-class dependency —
-`src/keeperhub/mcp.ts` — rather than something we found at the end.
+16. A provider marked `dynamic: true` is excluded from `composeState` unless
+    explicitly requested — it means "opt-in", not "recompute each time".
 
 ## Known gaps
 

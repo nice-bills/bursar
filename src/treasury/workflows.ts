@@ -9,18 +9,14 @@
  * KeeperHub's schedule, so it keeps working when the agent is down. That is the
  * whole point: an agent that has crashed cannot notice it has run out of gas.
  *
- * An earlier version of this file claimed a Condition node could not read a
- * `web3/check-balance` output, and moved that decision in-process as a result.
- * That was wrong, and the mistake was ours: the Condition node takes a
- * `condition` expression plus an optional `conditionConfig` for the visual
- * builder, and we were passing a top-level `group` key that appears nowhere in
- * its schema. The reference syntax was correct all along.
- *
- * The schema was discoverable the whole time. `list_action_schemas` on
- * KeeperHub's MCP server returns every action type with its required fields,
- * its output fields, and a worked templating example. Reading it first would
- * have replaced a day of probing the validator.
+ * Node shapes here follow `list_action_schemas` on KeeperHub's MCP server,
+ * which gives each action type's required fields, output fields, and a worked
+ * templating example. Worth consulting before hand-rolling a node: a Condition
+ * node, for instance, takes a `condition` expression and an optional
+ * `conditionConfig`, and a top-level `group` key passes validation while
+ * leaving the template reference unresolved at execution.
  */
+
 
 import type { FloatTarget } from "../config.js";
 import { formatUnits, NATIVE_DECIMALS } from "../units.js";

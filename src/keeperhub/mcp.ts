@@ -1,6 +1,5 @@
 /**
- * KeeperHub's MCP server — the interface the platform actually intends agents
- * to use.
+ * KeeperHub's MCP server — the interface the platform intends agents to use.
  *
  * The REST API moves value. This is how you find out what the platform can do
  * and what it will let you do: `list_action_schemas` returns every action type
@@ -8,13 +7,16 @@
  * `get_spending_limits` returns the org's enforced daily cap and how much of it
  * is already spent.
  *
- * Bursar was built for a while without either. The cost was a day of guessing
- * action-type names against the workflow validator, a wrong conclusion that the
- * template resolver was broken, and a local daily cap five times higher than
- * the platform would ever honour. All three were discoverable here.
+ * It is deliberately *not* mounted into the agent. The server exposes 44 tools
+ * whose definitions run to ~13k tokens, and `list_action_schemas` answers with
+ * close to half a megabyte — a single call would swamp the context it was
+ * meant to inform. Instead this client is called from code, the traffic stays
+ * in the program, and the agent sees six treasury actions. See
+ * `npm run context-cost` for the measurement.
  *
  * Transport is streamable HTTP: initialize, keep the session id, then call.
  */
+
 
 const DEFAULT_MCP_URL = "https://app.keeperhub.com/mcp";
 const PROTOCOL_VERSION = "2024-11-05";
@@ -73,6 +75,15 @@ export class KeeperHubMcp {
       remainingWei: cap > used ? cap - used : 0n,
       usingDefaultCap: data.usingDefaultDailyCap === true,
     };
+  }
+
+  /** The server's tool definitions — what mounting it would put in a prompt. */
+  async listTools(): Promise<unknown[]> {
+    await this.ensureSession();
+    const response = (await this.rpc("tools/list", {})) as {
+      result?: { tools?: unknown[] };
+    };
+    return response.result?.tools ?? [];
   }
 
   /**
