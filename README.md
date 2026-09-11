@@ -211,18 +211,27 @@ To have a real model choose the actions, add a free
 does not serve embeddings, so a local zero-vector stub covers those; the
 harness never searches by similarity, so only their width matters.
 
-Then, in an ElizaOS character:
+### Running it as an agent
 
-```jsonc
-{
-  "name": "MyAgent",
-  "plugins": ["plugin-bursar"],
-  "settings": {
-    "secrets": { "KEEPERHUB_API_KEY": "kh_..." },
-    "BURSAR_CONFIG_PATH": "bursar.config.json"
-  }
-}
+`character/treasurer.character.json` is a complete ElizaOS character — system
+prompt, bio, style, message examples wired to the treasury actions, and the
+plugin list. A test validates it against ElizaOS's own `validateCharacter`
+rather than against our idea of the format, and asserts that every action it
+demonstrates is one the plugin actually registers.
+
+```bash
+elizaos start --character character/treasurer.character.json
 ```
+
+`npm run agent` boots the same file through `ElizaOS`/`AgentRuntime` directly
+and asserts what a judge would want to check by hand: that the runtime starts
+the service, that the provider's text reaches `composeState`, and that a model
+selects `PAY_CONTRIBUTORS` from plain English. Add `--execute` to let the
+dispatched payout settle, `--no-model` to skip the model entirely.
+
+Secrets are never in the character file — `KEEPERHUB_API_KEY` and
+`OPENROUTER_API_KEY` come from the environment, and a test asserts the
+committed file contains neither.
 
 Scripts: `npm run agent` (dry) / `-- --execute`, `npm run demo` (dry) / `-- --execute`, `npm run chains`,
 `npm run workflow` (dry) / `-- --create`, `npm run smoke`,

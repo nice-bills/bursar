@@ -21,7 +21,7 @@
  */
 
 import "dotenv/config";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -56,7 +56,10 @@ const EXECUTE = process.argv.includes("--execute");
  * exercises every plugin surface — it just cannot show a model *choosing* the
  * action.
  */
-const OPENROUTER_KEY = process.env.OPENROUTER_API_KEY;
+// `--no-model` skips the model section entirely. Unsetting the environment
+// variable does not work, because dotenv loads .env back in.
+const NO_MODEL = process.argv.includes("--no-model");
+const OPENROUTER_KEY = NO_MODEL ? undefined : process.env.OPENROUTER_API_KEY;
 /**
  * Free OpenRouter models, in preference order.
  *
@@ -113,29 +116,29 @@ function banner(title: string): void {
   console.log(`\n${"─".repeat(72)}\n${title}\n${"─".repeat(72)}`);
 }
 
-const AGENT_NAME = "Bursar Demo Agent";
-
 /**
- * The runtime derives its agent id from the character name. The database
- * adapter is constructed with an agent id too, and the two must agree — a
- * mismatch inserts the agent row under one id and then violates a foreign key
- * writing rooms under the other.
+ * The character is the file this repo ships, not one invented for the harness.
+ *
+ * `character/treasurer.character.json` is what a user would pass to
+ * `elizaos start`, and a test validates it against ElizaOS's own
+ * `validateCharacter`. Loading it here means the demo exercises the same
+ * artifact rather than a convenient copy of it.
  */
-const AGENT_ID = stringToUuid(AGENT_NAME);
+const CHARACTER_PATH = process.env.BURSAR_CHARACTER ?? "character/treasurer.character.json";
 
-const character: Character = {
-  id: AGENT_ID,
-  name: AGENT_NAME,
-  bio: [
-    "An autonomous agent that earns for its work and pays the people who built it.",
-    "Runs its own treasury through KeeperHub.",
-  ],
-  plugins: [],
-  settings: {},
-};
+async function loadCharacter(): Promise<Character> {
+  const raw = JSON.parse(await readFile(CHARACTER_PATH, "utf8")) as Character;
+  // The runtime derives its agent id from the character name, and the database
+  // adapter is constructed with one too. They must agree or writes fail on a
+  // foreign key.
+  return { ...raw, id: stringToUuid(raw.name) };
+}
 
 async function main(): Promise<void> {
   const dataDir = await mkdtemp(join(tmpdir(), "bursar-agent-"));
+
+  const character = await loadCharacter();
+  const AGENT_ID = character.id!;
 
   // bootstrap supplies the ACTIONS provider that tells the model what it can
   // do, plus REPLY/IGNORE — without it there is nothing for a model to choose
@@ -153,7 +156,11 @@ async function main(): Promise<void> {
     : [sqlPlugin, stubModelPlugin, bootstrapPlugin, bursarPlugin];
 
   banner("1. Booting a real ElizaOS agent");
+  console.log(`  character: ${character.name}  (${CHARACTER_PATH})`);
+  console.log(`  declares: ${(character.plugins ?? []).join(", ")}`);
   console.log(`  model: ${USE_REAL_MODEL ? MODEL : "deterministic stub (no OPENROUTER_API_KEY)"}`);
+  // The character names its plugins; resolving names to modules is the CLI's
+  // job, so the harness passes the same set as already-imported objects.
 
   // ElizaOS is the orchestrator the CLI uses: it runs database migrations and
   // brings the runtime up. Constructing AgentRuntime directly skips migrations
@@ -181,7 +188,7 @@ async function main(): Promise<void> {
     const runtimes = await eliza.addAgents(
       [
         {
-          character,
+          character: { ...character, plugins: [] },
           databaseAdapter: adapter,
           plugins: modelPlugins,
           settings: {
@@ -373,13 +380,21 @@ async function main(): Promise<void> {
         // Try each free model until one answers. Overload on a free endpoint is
         // not a failure of the integration, so it should not read as one.
         let result: Awaited<ReturnType<typeof messageService.handleMessage>> | undefined;
+        const deadline = Date.now() + 180_000;
         for (const model of MODELS) {
+          if (Date.now() > deadline) {
+            console.log("  giving up on the free tier; re-run or set BURSAR_MODEL");
+            break;
+          }
           runtime.setSetting("OPENROUTER_SMALL_MODEL", model);
           runtime.setSetting("OPENROUTER_LARGE_MODEL", model);
           try {
             console.log(`  trying ${model} ...`);
             result = await messageService.handleMessage(runtime, ask, callback, {
-              timeoutDuration: 240_000,
+              // Bounded so a queue on one free endpoint does not stall the run;
+            // four fallbacks at four minutes each is sixteen minutes of looking
+            // broken.
+            timeoutDuration: 60_000,
             });
             console.log(`  answered by ${model}`);
             break;
