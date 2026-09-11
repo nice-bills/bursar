@@ -270,9 +270,16 @@ Stated plainly, since the submission form asks.
   path has not been exercised.
 - The float decision runs in-process, so it does not survive the agent being
   down — see the resolver limitation above.
-- Spending limits are denominated in the native asset only. ERC-20 movements
-  are refused outright rather than measured against a cap that does not apply
-  to them, which is what blocks the yield leg today.
+- Limits are per asset, so there is no ceiling on total value moved across all
+  of them. Expressing "no more than $X a day, everything included" needs prices,
+  and a treasury that reads a price feed to decide whether it may spend has
+  taken on an oracle as a dependency. Per-asset caps were the honest stopping
+  point.
+- `requireApprovalAbove` returns `needs_approval`, but nothing consumes it —
+  there is no approval path, so in practice it refuses. It is a placeholder for
+  a human-in-the-loop step, not a working one.
+- The ledger lock is advisory and per-file. It stops a second Bursar writing the
+  same ledger; it does not stop something else writing that file.
 - Free OpenRouter models are rate-limited and go "temporarily overloaded"
   without warning, so `npm run agent` tries several in turn. With no
   `OPENROUTER_API_KEY` it falls back to a deterministic stub, which exercises
