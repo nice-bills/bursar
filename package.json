@@ -52,5 +52,6 @@
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
-  }
+  },
+  "packageManager": "npm@11.19.0"
 }
