@@ -124,6 +124,11 @@ process that dies between "money left" and "we wrote it down".
 - **A sweep to your own wallet is refused.** It moves nothing but still burns
   gas and consumes the daily cap — a slow leak that also eats the budget a real
   payout needs.
+- **Local policy is reconciled with the platform's own cap.** KeeperHub enforces
+  a per-organisation daily ceiling — 0.02 ETH here — and that is the limit that
+  actually binds. A locally configured 0.1 was fiction: movements passed every
+  local check and then failed at the API for a reason the policy engine never
+  saw. It now reads `get_spending_limits` and refuses with the real numbers.
 - **Payouts go out on the chain that holds the money.** Preferring a
   private-mempool chain used to silently redirect them: a treasury funded on
   Base would pay out on Ethereum mainnet, where it holds nothing, so every
@@ -140,15 +145,14 @@ process that dies between "money left" and "we wrote it down".
 | Idempotency | Server-side replay protection, verified end to end |
 | Agent-authored workflows | Bursar composes and upserts a float monitor onto KeeperHub, then executes it and reads its output ([`dg9oxiktaln5qv9hl5987`](https://app.keeperhub.com/workflows/dg9oxiktaln5qv9hl5987)) |
 | Audit trail | Execution ids and transaction hashes recorded per movement |
+| MCP server | `list_action_schemas` for authoritative action schemas, `get_spending_limits` to read the org's enforced daily budget |
 | Private routing | Payouts prefer chains with MEV-protected submission |
 
-The float was meant to be a self-contained keeper on KeeperHub's schedule —
-**an agent that has crashed cannot notice it has run out of gas.** The balance
-half runs green; the comparison does not, because a Condition node cannot read
-a `web3/check-balance` node's output (see below). So Bursar executes the
-monitor workflow and decides in-process. That costs the crash-resilience, but
-buys something back: the top-up now passes through the policy engine, the
-ledger, and idempotency, which a pure workflow would have bypassed.
+The float is a self-contained keeper on KeeperHub's schedule, because **an
+agent that has crashed cannot notice it has run out of gas.** It reads the
+balance, compares it to the floor and tops up, entirely on the platform — no
+agent process involved:
+[`0xd0a0cc0c…`](https://sepolia.etherscan.io/tx/0xd0a0cc0cbc0cf134992053196612149e967ed0587df979e66c18705adb5a0914)
 
 ## The money loop
 
@@ -157,7 +161,7 @@ ledger, and idempotency, which a pure workflow would have bypassed.
 | **Payout** — split revenue to contributors by share | Working, onchain |
 | **Sweep** — consolidate earnings into the treasury | Working, onchain |
 | **Yield** — surplus above the buffer into Aave v3 | Working, onchain |
-| **Float** — keep the operating wallet in gas | Working; balance read via workflow, decision in-process |
+| **Float** — keep the operating wallet in gas | Working; a keeper that runs on KeeperHub without the agent |
 | **Report** — statement with a hash per line | Working |
 
 Yield runs through the executor like every other movement, so the lending pool
@@ -222,15 +226,12 @@ Documented behaviour that differs from the live API, all confirmed by probing:
 7. Workflows are updated with `PATCH`; `PUT` and `POST` both answer 405. A
    workflow that has ever run cannot be deleted until its executions are, so
    re-authoring must upsert rather than replace.
-8. **A Condition node cannot read a `web3/check-balance` node's output.** Every
-   reference form fails identically in freshly created workflows:
-   `{{@step-1:Bal.balanceWei}}`, `{{step-1.balanceWei}}`,
-   `{{@step-1:Bal.balance}}` — *"Unresolved template reference(s) … resolver
-   did not match."* The field is real (executing the balance node alone returns
-   `{ address, balance, balanceWei, addressLink, success }`) and the `@` form is
-   what KeeperHub's own Aave template uses, so core web3 node outputs appear not
-   to be registered with the template resolver. This is the one finding that
-   changed our architecture.
+8. ~~A Condition node cannot read a `web3/check-balance` output.~~ **Retracted —
+   this was our bug, not theirs.** The Condition node takes a `condition`
+   expression and an optional `conditionConfig`; we were passing a top-level
+   `group` key that appears nowhere in its schema. The reference syntax was
+   correct throughout. Removing `group` made it resolve first try. We had
+   reported this as a platform defect and restructured the float around it.
 9. `PATCH` followed immediately by `execute` can run the *previous* definition.
    Worth knowing before concluding a fix did not work — it cost us an hour.
 10. **Units differ between surfaces.** `/execute/transfer` takes a decimal
@@ -241,8 +242,10 @@ Documented behaviour that differs from the live API, all confirmed by probing:
     `transactionHashes` as an array of objects carrying `hash`, `gasUsed`,
     `blockNumber` and `receiptStatus`. Stringifying one as the other writes
     `"[object Object]"` into your audit trail, which is how we first stored it.
-12. `web3/check-balance` is native-only — it rejects a `token` field. ERC-20
-    balances need `web3/read-contract` with `balanceOf`.
+12. `web3/check-balance` is native-only — it rejects a `token` field. ~~ERC-20
+    balances need `web3/read-contract` with `balanceOf`.~~ **Half retracted:**
+    `web3/check-token-balance` exists and is the right node; we simply never
+    guessed that name.
 
 And in Aave's Sepolia market, which cost a detour: `supplyCap == 0` means *no
 cap*, not "nothing may be supplied". DAI, USDC and USDT have all hit their 2B
@@ -260,7 +263,17 @@ And in ElizaOS itself, from booting it:
     "ready" signal. Poll for the service rather than racing it.
 
 The workflow validator is genuinely good: it reports every invalid node at once
-with `path`, `expected`, and `received`, which made the above discoverable.
+with `path`, `expected`, and `received`.
+
+**The larger lesson is about us, not the platform.** Two of the findings above
+are retracted because they were our mistakes, and both came from the same
+cause: we reverse-engineered action types by brute-forcing the validator
+instead of calling `list_action_schemas` on KeeperHub's MCP server, which
+returns every action type with its required fields, its output fields, and a
+worked templating example. A day of probing, one wrong bug report, and an
+architecture detour, all avoidable by reading the interface the platform
+provides for exactly this. That tool is now a first-class dependency —
+`src/keeperhub/mcp.ts` — rather than something we found at the end.
 
 ## Known gaps
 
@@ -268,8 +281,6 @@ Stated plainly, since the submission form asks.
 
 - Testnet only so far. Nothing is chain-specific about the code, but the mainnet
   path has not been exercised.
-- The float decision runs in-process, so it does not survive the agent being
-  down — see the resolver limitation above.
 - Limits are per asset, so there is no ceiling on total value moved across all
   of them. Expressing "no more than $X a day, everything included" needs prices,
   and a treasury that reads a price feed to decide whether it may spend has

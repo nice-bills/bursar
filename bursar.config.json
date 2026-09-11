@@ -32,13 +32,13 @@
     "buffer": "5000000000000000000"
   },
   "policy": {
-    "maxPerTransfer": "20000000000000000",
-    "maxPerDay": "100000000000000000",
+    "maxPerTransfer": "5000000000000000",
+    "maxPerDay": "20000000000000000",
     "allowlist": [
       "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9",
       "0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951"
     ],
-    "requireApprovalAbove": "10000000000000000",
+    "requireApprovalAbove": "4000000000000000",
     "assets": {
       "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14": {
         "symbol": "WETH",

@@ -88,7 +88,7 @@ async function main(): Promise<void> {
     return [];
   });
 
-  banner("7. CHECK_GAS_FLOAT — reading balance via the agent-authored workflow");
+  banner("7. CHECK_GAS_FLOAT — installing the gas keeper that runs without the agent");
   await checkFloatAction.handler(runtime, userMessage("are you low on gas?"), emptyState(), undefined, async (content) => {
     for (const line of String(content.text ?? "").split("\n")) console.log(`   ${line}`);
     return [];

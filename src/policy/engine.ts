@@ -11,6 +11,19 @@
 
 import { assetPolicyFor, type BursarConfig } from "../config.js";
 import type { Leg, Ledger } from "../ledger/store.js";
+import type { SpendingLimits } from "../keeperhub/mcp.js";
+
+/**
+ * The platform's own budget, if it can be read.
+ *
+ * Returning null means "unknown", which is treated as no extra constraint —
+ * a treasury that cannot reach the MCP server should still be able to pay
+ * people, and the transfer will simply fail loudly if the cap is exceeded.
+ */
+export type PlatformLimitsReader = () => Promise<SpendingLimits | null>;
+
+/** Platform limits change slowly; re-reading them per movement is wasteful. */
+const LIMITS_TTL_MS = 60_000;
 
 export type Decision =
   | { verdict: "allow" }
@@ -30,10 +43,39 @@ export interface Movement {
 }
 
 export class PolicyEngine {
+  private cachedLimits?: { at: number; limits: SpendingLimits | null };
+
   constructor(
     private readonly config: BursarConfig,
     private readonly ledger: Ledger,
+    /**
+     * Reads KeeperHub's enforced daily cap. Optional, because the policy engine
+     * must work offline and in tests.
+     */
+    private readonly platformLimits?: PlatformLimitsReader,
   ) {}
+
+  /**
+   * KeeperHub's remaining daily budget, cached briefly.
+   *
+   * Never throws: an unreachable MCP server must not stop a payout that local
+   * policy already approved.
+   */
+  private async remainingPlatformBudget(): Promise<SpendingLimits | null> {
+    if (!this.platformLimits) return null;
+    const now = Date.now();
+    if (this.cachedLimits && now - this.cachedLimits.at < LIMITS_TTL_MS) {
+      return this.cachedLimits.limits;
+    }
+    let limits: SpendingLimits | null = null;
+    try {
+      limits = await this.platformLimits();
+    } catch {
+      limits = null;
+    }
+    this.cachedLimits = { at: now, limits };
+    return limits;
+  }
 
   /**
    * Addresses value may leave to: every contributor, plus explicit extras such
@@ -129,7 +171,30 @@ export class PolicyEngine {
       };
     }
 
-    // 5. Unreconciled history. If a previous movement is still open we do not
+    // 5. The platform's own daily cap.
+    //
+    //    KeeperHub enforces a per-organisation daily ceiling on direct
+    //    execution, and it is the one that actually binds. A locally
+    //    configured limit above it is fiction: the movement passes every check
+    //    here and then fails at the API for a reason this engine never saw.
+    //    Checking it turns that into a refusal that explains itself.
+    if (movement.token === null) {
+      const platform = await this.remainingPlatformBudget();
+      if (platform && amount > platform.remainingWei) {
+        return {
+          verdict: "deny",
+          reason:
+            `KeeperHub's daily cap leaves ${platform.remainingWei} wei today ` +
+            `(${platform.dailyUsedWei} of ${platform.effectiveDailyCapWei} spent), which is ` +
+            `less than this ${amount} wei movement` +
+            (platform.usingDefaultCap
+              ? ". The org is on the default cap; raise it in KeeperHub to move more."
+              : "."),
+        };
+      }
+    }
+
+    // 6. Unreconciled history. If a previous movement is still open we do not
     //    know the true balance, so committing more money is guesswork.
     const open = await this.ledger.openIntents();
     const blocking = open.filter((e) => e.chainId === movement.chainId);
@@ -142,7 +207,7 @@ export class PolicyEngine {
       };
     }
 
-    // 6. Human escalation threshold — last, so the reason returned is the most
+    // 7. Human escalation threshold — last, so the reason returned is the most
     //    actionable one rather than an approval prompt masking a hard failure.
     //    Only meaningful for the native asset it is denominated in.
     const threshold =

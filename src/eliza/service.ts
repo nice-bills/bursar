@@ -20,7 +20,7 @@ import { PolicyEngine } from "../policy/engine.js";
 import { Executor, type MoveOutcome } from "../treasury/executor.js";
 import { formatUnits, NATIVE_DECIMALS } from "../units.js";
 import {
-  floatMonitorWorkflow,
+  gasFloatWorkflow,
   nativeBalanceWorkflow,
   readBalanceOutput,
   erc20BalanceWorkflow,
@@ -182,82 +182,52 @@ export class BursarService extends Service {
   }
 
   /**
-   * Keep the operating wallet above its floor.
+   * Keep the operating wallet funded.
    *
-   * The balance comes from the agent-authored monitor workflow rather than a
-   * local RPC call: it is the same reading KeeperHub's scheduler takes, so the
-   * decision cannot disagree with the platform's own view.
+   * The decision lives on KeeperHub, not here. The keeper reads the balance,
+   * compares it to the floor and tops up on a schedule, so it keeps working
+   * while the agent is down — which is the only time running out of gas
+   * actually matters.
    *
-   * The top-up amount is `target - min`, fixed from config rather than derived
-   * from the reading. A top-up computed from the balance it is about to change
-   * can chase its own effect; a fixed amount cannot.
+   * The top-up is `target - min`, fixed when the workflow is authored rather
+   * than derived from the reading, so a run cannot chase its own effect.
    */
-  async checkFloat(period = dailyPeriod()): Promise<FloatReport[]> {
+  async checkFloat(): Promise<FloatReport[]> {
     const reports: FloatReport[] = [];
 
     for (const float of this.treasuryCfg.float) {
-      const workflow = floatMonitorWorkflow(float);
+      const workflow = gasFloatWorkflow(float);
       const workflowId = await this.ensureWorkflow(workflow.name, workflow);
 
-      const run = await this.client.executeWorkflow(workflowId, {}, `float-${workflowId}-${Date.now()}`);
-      const final = await this.client.awaitExecution(run.executionId);
-      const reading = readBalanceOutput(final.output);
-
-      if (!reading) {
-        reports.push({
-          chainId: float.chainId,
-          address: float.address,
-          balance: null,
-          topUp: null,
-          note: `could not read balance (execution ${final.status})`,
-        });
-        continue;
-      }
-
-      const balance = BigInt(reading.balanceWei);
-      const floor = BigInt(float.minBalance);
-
-      if (balance >= floor) {
-        reports.push({
-          chainId: float.chainId,
-          address: float.address,
-          balance: reading.balance,
-          topUp: null,
-          note: `above the ${formatUnits(floor, NATIVE_DECIMALS)} floor; nothing to do`,
-        });
-        continue;
-      }
-
-      const amount = (BigInt(float.targetBalance) - floor).toString();
-      const outcome = await this.executor.move(
-        {
-          leg: "float",
-          chainId: float.chainId,
-          to: float.address,
-          amount,
-          token: null,
-          decimals: NATIVE_DECIMALS,
-          memo: `gas top-up: balance ${reading.balance} below floor`,
-        },
-        period,
+      // Run it now too, so "am I low on gas?" gets an answer rather than a
+      // promise about the next hour.
+      const run = await this.client.executeWorkflow(
+        workflowId,
+        {},
+        `float-${workflowId}-${Date.now()}`,
       );
+      const final = await this.client.awaitExecution(run.executionId);
+      const toppedUp = final.transactionHashes.length > 0;
+      const floorLabel = formatUnits(BigInt(float.minBalance), NATIVE_DECIMALS);
 
       reports.push({
         chainId: float.chainId,
         address: float.address,
-        balance: reading.balance,
-        topUp: formatUnits(BigInt(amount), NATIVE_DECIMALS),
-        note:
-          outcome.result === "confirmed"
-            ? `topped up — ${outcome.transactionHashes[0] ?? ""}`
-            : outcome.result === "blocked"
-              ? `top-up blocked: ${outcome.reason}`
-              : `top-up ${outcome.result}`,
+        balance: null,
+        topUp: toppedUp
+          ? formatUnits(BigInt(float.targetBalance) - BigInt(float.minBalance), NATIVE_DECIMALS)
+          : null,
+        note: toppedUp
+          ? `keeper installed and topped up — ${final.transactionLinks[0] ?? final.transactionHashes[0]}`
+          : final.status === "success"
+            ? `keeper installed, running hourly; balance is above the ${floorLabel} floor`
+            : `keeper ran but finished as ${final.status}`,
       });
     }
 
     return reports;
   }
+
 
   /**
    * Author the workflow if absent, update it if present. Never duplicates.

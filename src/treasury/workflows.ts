@@ -1,33 +1,25 @@
 /**
  * Agent-authored workflows.
  *
- * Bursar composes these; KeeperHub stores, schedules, and executes them. Node
- * shapes mirror workflows read back from the live API rather than the
- * documented examples, which differ in places.
+ * Bursar composes these; KeeperHub stores, schedules, and executes them.
  *
- * ## Why the float is split across two systems
+ * ## The float is a self-contained keeper
  *
- * The intent was a self-contained keeper: read balance, compare to a floor,
- * top up — all on KeeperHub's schedule, so it keeps working when the agent is
- * down. The balance half runs green. The comparison does not: a Condition node
- * cannot read a `web3/check-balance` node's output.
+ * It reads the operating balance, compares it to a floor, and tops up — all on
+ * KeeperHub's schedule, so it keeps working when the agent is down. That is the
+ * whole point: an agent that has crashed cannot notice it has run out of gas.
  *
- * Every reference form fails identically, in freshly created workflows:
+ * An earlier version of this file claimed a Condition node could not read a
+ * `web3/check-balance` output, and moved that decision in-process as a result.
+ * That was wrong, and the mistake was ours: the Condition node takes a
+ * `condition` expression plus an optional `conditionConfig` for the visual
+ * builder, and we were passing a top-level `group` key that appears nowhere in
+ * its schema. The reference syntax was correct all along.
  *
- *   {{@step-1:Bal.balanceWei}}   {{step-1.balanceWei}}   {{@step-1:Bal.balance}}
- *
- *   "Unresolved template reference(s) ... resolver did not match."
- *
- * The field is real — executing the balance node alone returns
- * `{ address, balance, balanceWei, addressLink, success }` — and the `@form`
- * matches what KeeperHub's own Aave template uses. So core web3 node outputs
- * appear not to be registered with the template resolver.
- *
- * Until that is resolved upstream, the workflow below is the half that works:
- * a scheduled balance reading. `BursarService.checkFloat()` consumes its
- * output and decides in-process, which also means the top-up inherits the
- * policy engine, the ledger, and idempotency — protections a pure workflow
- * would not have had.
+ * The schema was discoverable the whole time. `list_action_schemas` on
+ * KeeperHub's MCP server returns every action type with its required fields,
+ * its output fields, and a worked templating example. Reading it first would
+ * have replaced a day of probing the validator.
  */
 
 import type { FloatTarget } from "../config.js";
@@ -43,6 +35,7 @@ import { formatUnits, NATIVE_DECIMALS } from "../units.js";
  */
 export const WEB3 = {
   checkBalance: "web3/check-balance",
+  checkTokenBalance: "web3/check-token-balance",
   transferFunds: "web3/transfer-funds",
   readContract: "web3/read-contract",
   writeContract: "web3/write-contract",
@@ -65,6 +58,8 @@ interface WorkflowEdge {
   id: string;
   source: string;
   target: string;
+  /** Condition nodes expose "true" and "false" handles for if/else branching. */
+  sourceHandle?: string;
 }
 
 export interface WorkflowDefinition {
@@ -86,6 +81,90 @@ export interface WorkflowDefinition {
  * provide — and it means the same run twice cannot drain the treasury by
  * reacting to its own effect.
  */
+/**
+ * The gas keeper: read, compare, top up — entirely on KeeperHub's schedule.
+ *
+ * The top-up is `target - min`, fixed when the workflow is authored rather than
+ * derived from the reading. The amount must not depend on the balance it is
+ * about to change, or a run reacts to its own effect.
+ */
+export function gasFloatWorkflow(
+  float: FloatTarget & { address: string },
+  cron = "0 * * * *",
+): WorkflowDefinition {
+  const network = String(float.chainId);
+  const floorLabel = formatUnits(BigInt(float.minBalance), NATIVE_DECIMALS);
+  const topUp = (BigInt(float.targetBalance) - BigInt(float.minBalance)).toString();
+  const topUpLabel = formatUnits(BigInt(topUp), NATIVE_DECIMALS);
+  const balanceRef = "{{@check-balance:Check Balance.balanceWei}}";
+
+  return {
+    name: `Bursar Gas Keeper — chain ${float.chainId}`,
+    description:
+      `Keep ${float.address} above ${floorLabel} native on chain ${float.chainId}, topping ` +
+      `up by ${topUpLabel} when it dips below. Runs on KeeperHub's schedule, so it survives ` +
+      `the agent being down. Authored by plugin-bursar.`,
+    nodes: [
+      {
+        id: "trigger-1",
+        type: "trigger",
+        data: {
+          type: "trigger",
+          label: "Hourly",
+          config: { triggerType: "Schedule", scheduleCron: cron, scheduleTimezone: "UTC" },
+          status: "idle",
+        },
+        position: { x: 0, y: 116 },
+      },
+      {
+        id: "check-balance",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Check Balance",
+          config: { actionType: WEB3.checkBalance, network, address: float.address },
+          status: "idle",
+        },
+        position: { x: 252, y: 116 },
+      },
+      {
+        id: "gate",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Below Floor?",
+          // Compared on balanceWei so the gate is exact integer arithmetic.
+          config: { actionType: "Condition", condition: `${balanceRef} < ${float.minBalance}` },
+          status: "idle",
+        },
+        position: { x: 504, y: 116 },
+      },
+      {
+        id: "top-up",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Top Up Gas",
+          config: {
+            actionType: WEB3.transferFunds,
+            network,
+            recipientAddress: float.address,
+            amount: topUpLabel,
+          },
+          status: "idle",
+        },
+        position: { x: 756, y: 116 },
+      },
+    ],
+    edges: [
+      { id: "e1", source: "trigger-1", target: "check-balance" },
+      { id: "e2", source: "check-balance", target: "gate" },
+      // Only the true branch tops up.
+      { id: "e3", source: "gate", target: "top-up", sourceHandle: "true" },
+    ],
+  };
+}
+
 export function floatMonitorWorkflow(
   float: FloatTarget & { address: string },
   cron = "0 * * * *",
@@ -174,23 +253,12 @@ export function nativeBalanceWorkflow(chainId: number, holder: string): Workflow
   };
 }
 
-/** Minimal ERC-20 ABI for a balance read, stringified as the API requires. */
-const ERC20_BALANCE_ABI = JSON.stringify([
-  {
-    constant: true,
-    inputs: [{ name: "_owner", type: "address" }],
-    name: "balanceOf",
-    outputs: [{ name: "balance", type: "uint256" }],
-    stateMutability: "view",
-    type: "function",
-  },
-]);
-
 /**
  * Read an ERC-20 balance.
  *
- * `web3/check-balance` is native-only — it rejects a `token` field — so token
- * balances go through a contract read instead.
+ * `web3/check-token-balance` is the node for this. An earlier version used a
+ * raw `web3/read-contract` balanceOf because probing had not turned this up —
+ * `list_action_schemas` lists it plainly.
  */
 export function erc20BalanceWorkflow(
   chainId: number,
@@ -200,120 +268,44 @@ export function erc20BalanceWorkflow(
 ): WorkflowDefinition {
   return {
     name: `Bursar ${symbol} Balance ${tag(holder)} — chain ${chainId}`,
-    description:
-      `Read the ${symbol} balance of ${holder} on chain ${chainId}. Authored by plugin-bursar.`,
+    description: `Read the ${symbol} balance of ${holder} on chain ${chainId}. Authored by plugin-bursar.`,
     nodes: [
       {
         id: "trigger-1",
         type: "trigger",
-        data: {
-          type: "trigger",
-          label: "Manual",
-          config: { triggerType: "Manual" },
-          status: "idle",
-        },
+        data: { type: "trigger", label: "Manual", config: { triggerType: "Manual" }, status: "idle" },
         position: { x: 0, y: 116 },
       },
       {
-        id: "step-1",
+        id: "check-token-balance",
         type: "action",
         data: {
           type: "action",
-          label: "Read Token Balance",
+          label: "Check Token Balance",
           config: {
-            actionType: WEB3.readContract,
+            actionType: WEB3.checkTokenBalance,
             network: String(chainId),
-            contractAddress: token,
-            abi: ERC20_BALANCE_ABI,
-            abiFunction: "balanceOf",
-            functionArgs: JSON.stringify([holder]),
+            address: holder,
+            // The node selects the token through a JSON config rather than a
+            // bare address field.
+            tokenConfig: JSON.stringify({
+              mode: "custom",
+              customToken: { address: token, symbol },
+            }),
           },
           status: "idle",
-          description: `balanceOf(${holder})`,
         },
         position: { x: 252, y: 116 },
       },
     ],
-    edges: [{ id: "e1", source: "trigger-1", target: "step-1" }],
+    edges: [{ id: "e1", source: "trigger-1", target: "check-token-balance" }],
   };
 }
 
-/**
- * Supply an asset to Aave v3.
- *
- * Uses KeeperHub's own aave-v3 plugin rather than hand-encoding a Pool call,
- * so the pool address and ABI are the platform's problem rather than ours.
- *
- * Note the unit: this node takes `amount` in base units, while the direct
- * `/execute/transfer` API takes a decimal string. Same platform, opposite
- * conventions — Bursar holds base units internally and converts only where
- * each surface demands it.
- */
-export function aaveSupplyWorkflow(
-  chainId: number,
-  asset: string,
-  amountBaseUnits: string,
-  onBehalfOf: string,
-  symbol: string,
-): WorkflowDefinition {
-  return {
-    name: `Bursar Aave Supply ${symbol} — chain ${chainId}`,
-    description:
-      `Supply ${symbol} to Aave v3 on chain ${chainId} on behalf of ${onBehalfOf}. ` +
-      `Authored by plugin-bursar.`,
-    nodes: [
-      {
-        id: "trigger-1",
-        type: "trigger",
-        data: {
-          type: "trigger",
-          label: "Manual",
-          config: { triggerType: "Manual" },
-          status: "idle",
-        },
-        position: { x: 0, y: 116 },
-      },
-      {
-        id: "step-1",
-        type: "action",
-        data: {
-          type: "action",
-          label: "Supply to Aave",
-          config: {
-            actionType: "aave-v3/supply",
-            network: String(chainId),
-            asset,
-            amount: amountBaseUnits,
-            onBehalfOf,
-          },
-          status: "idle",
-          description: `supply ${symbol} to the lending pool`,
-        },
-        position: { x: 252, y: 116 },
-      },
-    ],
-    edges: [{ id: "e1", source: "trigger-1", target: "step-1" }],
-  };
-}
-
-/** ERC-20 approve, stringified ABI as the contract-call API requires. */
-export const ERC20_APPROVE_ABI = JSON.stringify([
-  {
-    inputs: [
-      { name: "spender", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    name: "approve",
-    outputs: [{ name: "", type: "bool" }],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-]);
-
-/** Output of a `web3/read-contract` balanceOf call, confirmed by execution. */
+/** Output of `web3/check-token-balance`: balance.balanceRaw holds base units. */
 export function readErc20Output(output: unknown): bigint | null {
-  const o = output as { result?: { balance?: unknown } } | null;
-  const raw = o?.result?.balance;
+  const o = output as { balance?: { balanceRaw?: unknown } } | null;
+  const raw = o?.balance?.balanceRaw;
   if (typeof raw !== "string" && typeof raw !== "number") return null;
   try {
     return BigInt(raw);
@@ -344,3 +336,68 @@ export function readBalanceOutput(output: unknown): BalanceReading | null {
     success: Boolean(o.success),
   };
 }
+
+/**
+ * Supply an asset to Aave v3.
+ *
+ * Uses KeeperHub's own aave-v3 plugin rather than hand-encoding a Pool call, so
+ * the pool address and ABI are the platform's concern rather than ours.
+ *
+ * Note the unit: this node takes `amount` in base units, while the direct
+ * `/execute/transfer` API takes a decimal string. Bursar holds base units
+ * internally and converts only where a surface demands it.
+ */
+export function aaveSupplyWorkflow(
+  chainId: number,
+  asset: string,
+  amountBaseUnits: string,
+  onBehalfOf: string,
+  symbol: string,
+): WorkflowDefinition {
+  return {
+    name: `Bursar Aave Supply ${symbol} — chain ${chainId}`,
+    description:
+      `Supply ${symbol} to Aave v3 on chain ${chainId} on behalf of ${onBehalfOf}. ` +
+      `Authored by plugin-bursar.`,
+    nodes: [
+      {
+        id: "trigger-1",
+        type: "trigger",
+        data: { type: "trigger", label: "Manual", config: { triggerType: "Manual" }, status: "idle" },
+        position: { x: 0, y: 116 },
+      },
+      {
+        id: "supply",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Supply to Aave",
+          config: {
+            actionType: "aave-v3/supply",
+            network: String(chainId),
+            asset,
+            amount: amountBaseUnits,
+            onBehalfOf,
+          },
+          status: "idle",
+        },
+        position: { x: 252, y: 116 },
+      },
+    ],
+    edges: [{ id: "e1", source: "trigger-1", target: "supply" }],
+  };
+}
+
+/** ERC-20 approve, stringified ABI as the contract-call API requires. */
+export const ERC20_APPROVE_ABI = JSON.stringify([
+  {
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "approve",
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+]);

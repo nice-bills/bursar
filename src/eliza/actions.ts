@@ -252,9 +252,10 @@ export const checkFloatAction: Action = {
   name: "CHECK_GAS_FLOAT",
   similes: ["TOP_UP_GAS", "CHECK_GAS", "REFILL_GAS", "AM_I_RUNNING_OUT_OF_GAS"],
   description:
-    "Read the agent's operating balance through its KeeperHub monitor workflow and top it " +
-    "up from the treasury if it has fallen below the configured floor. Use when asked about " +
-    "gas, whether the agent can keep working, or to refill the operating wallet.",
+    "Install and run the agent's gas keeper on KeeperHub: it reads the operating balance on " +
+    "a schedule and tops it up from the treasury when it falls below the floor, so the agent " +
+    "stays funded even while it is down. Use when asked about gas, whether the agent can keep " +
+    "working, or to refill the operating wallet.",
 
   validate: async (runtime: IAgentRuntime): Promise<boolean> => {
     const service = getService(runtime);
@@ -275,18 +276,19 @@ export const checkFloatAction: Action = {
     }
 
     const reports = await service.checkFloat();
+    // The keeper evaluates the balance on-platform and only reports what it
+    // did, so there is no balance to echo unless it acted.
     const lines = reports.map(
       (r) =>
-        `  chain ${r.chainId} ${r.address}: ` +
-        `${r.balance === null ? "balance unknown" : `${r.balance} native`}` +
-        `${r.topUp ? `, topped up by ${r.topUp}` : ""} — ${r.note}`,
+        `  chain ${r.chainId} ${r.address}: ${r.note}` +
+        (r.topUp ? ` (${r.topUp} added)` : ""),
     );
 
-    const text = ["Gas float check:", ...lines].join("\n");
+    const text = ["Gas keeper:", ...lines].join("\n");
     await respond(callback, text);
 
     return {
-      success: reports.every((r) => r.balance !== null),
+      success: reports.every((r) => !/finished as/.test(r.note)),
       text,
       data: { reports },
     };
