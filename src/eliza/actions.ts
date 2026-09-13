@@ -93,6 +93,11 @@ export const payContributorsAction: Action = {
         lines.push(`  ${o.contributor}: ${pretty} already paid this period, skipped`);
       } else if (o.outcome.result === "blocked") {
         lines.push(`  ${o.contributor}: ${pretty} blocked — ${o.outcome.reason}`);
+      } else if (o.outcome.result === "held") {
+        lines.push(
+          `  ${o.contributor}: ${pretty} held for approval — ${o.outcome.reason}\n` +
+            `    approve with: ${o.outcome.intentId}`,
+        );
       } else {
         lines.push(`  ${o.contributor}: ${pretty} failed — ${o.outcome.error}`);
       }
@@ -101,6 +106,9 @@ export const payContributorsAction: Action = {
     if (failed.length > 0) {
       lines.push("Run RECONCILE_TREASURY before attempting further payouts.");
     }
+    if (report.outcomes.some((o) => o.outcome.result === "held")) {
+      lines.push("Some payouts need a person. Ask me to list pending approvals.");
+    }
 
     const text = lines.join("\n");
     await respond(callback, text);
@@ -108,7 +116,11 @@ export const payContributorsAction: Action = {
     return {
       // Partial success is still failure for money: if anyone who should have
       // been paid was not, the caller needs to know without parsing prose.
-      success: failed.length === 0 && blocked.length === 0,
+      // Held is not success: nothing moved, and someone has to decide.
+      success:
+        failed.length === 0 &&
+        blocked.length === 0 &&
+        !report.outcomes.some((o) => o.outcome.result === "held"),
       text,
       data: {
         total: report.total,
@@ -416,7 +428,129 @@ export const deployYieldAction: Action = {
   ],
 };
 
+/**
+ * Approval is a human act, so the agent's job is to surface the decision and
+ * carry it out — not to make it. The action reads what is held and, when the
+ * message clearly authorises one, releases it.
+ */
+export const pendingApprovalsAction: Action = {
+  name: "REVIEW_PENDING",
+  similes: ["PENDING_APPROVALS", "WHAT_NEEDS_APPROVAL", "APPROVE_PAYOUT", "RELEASE_PAYMENT"],
+  description:
+    "List treasury movements held for human approval, and release one when the operator " +
+    "approves it by name or id. Use when asked what is pending, what needs sign-off, or to " +
+    "approve or decline a held payment.",
+
+  validate: treasuryReady,
+
+  handler: async (
+    runtime: IAgentRuntime,
+    message: Memory,
+    _state?: State,
+    _options?: unknown,
+    callback?: HandlerCallback,
+  ): Promise<ActionResult> => {
+    const service = getService(runtime);
+    if (!service) {
+      return { success: false, error: "Bursar treasury service is not running." };
+    }
+
+    const held = await service.pending();
+    if (held.length === 0) {
+      const text = "Nothing is waiting on approval.";
+      await respond(callback, text);
+      return { success: true, text, data: { pending: 0 } };
+    }
+
+    const said = (message.content?.text ?? "").toLowerCase();
+    const approving = /\b(approve|release|authorise|authorize|go ahead|yes)\b/.test(said);
+    const declining = /\b(decline|reject|deny|cancel|no)\b/.test(said);
+
+    // Only act on a decision that names its target. "Approve it" with three
+    // held payments is not an instruction, it is an ambiguity.
+    const named = held.find((e) => said.includes(e.intentId.slice(-8).toLowerCase()));
+
+    if ((approving || declining) && !named && held.length === 1) {
+      // One candidate and a clear verb is unambiguous enough to act on.
+      const only = held[0]!;
+      return decide(service, only, approving, runtime, callback);
+    }
+
+    if ((approving || declining) && named) {
+      return decide(service, named, approving, runtime, callback);
+    }
+
+    const lines = [
+      `${held.length} movement(s) waiting on approval:`,
+      ...held.map(
+        (e) =>
+          `  ${e.intentId.slice(-8)} · ${formatUnits(BigInt(e.amount), e.decimals)} → ${e.to}\n` +
+          `    ${e.memo}\n` +
+          `    held because ${e.heldReason ?? "it exceeded the approval threshold"}`,
+      ),
+      approving || declining
+        ? "Name which one, by the eight characters shown."
+        : "Approve or decline one by naming those eight characters.",
+    ];
+
+    const text = lines.join("\n");
+    await respond(callback, text);
+    return { success: true, text, data: { pending: held.length } };
+  },
+
+  examples: [
+    [
+      { name: "{{user1}}", content: { text: "anything waiting on me?" } },
+      {
+        name: "{{agent}}",
+        content: {
+          text: "Two payments are held above the approval threshold.",
+          actions: ["REVIEW_PENDING"],
+        },
+      },
+    ],
+    [
+      { name: "{{user1}}", content: { text: "approve a3f91c22" } },
+      {
+        name: "{{agent}}",
+        content: { text: "Releasing that payment now.", actions: ["REVIEW_PENDING"] },
+      },
+    ],
+  ],
+};
+
+async function decide(
+  service: BursarService,
+  entry: { intentId: string; amount: string; decimals: number; to: string },
+  approving: boolean,
+  runtime: IAgentRuntime,
+  callback?: HandlerCallback,
+): Promise<ActionResult> {
+  const who = String(runtime.getSetting("BURSAR_APPROVER") ?? "operator");
+  const pretty = formatUnits(BigInt(entry.amount), entry.decimals);
+
+  if (!approving) {
+    await service.decline(entry.intentId, who);
+    const text = `Declined ${pretty} to ${entry.to}. Nothing was sent.`;
+    await respond(callback, text);
+    return { success: true, text, data: { declined: entry.intentId } };
+  }
+
+  const outcome = await service.approve(entry.intentId, who);
+  const text =
+    outcome.result === "confirmed"
+      ? `Approved and sent ${pretty} to ${entry.to} — ` +
+        `${outcome.entry.transactionLinks?.[0] ?? outcome.transactionHashes[0] ?? ""}`
+      : outcome.result === "blocked"
+        ? `Approved, but it still could not go: ${outcome.reason}`
+        : `Approved, but the result was ${outcome.result}.`;
+
+  await respond(callback, text);
+  return { success: outcome.result === "confirmed", text, data: { approved: entry.intentId } };
+}
+
 export const treasuryActions: Action[] = [
+  pendingApprovalsAction,
   deployYieldAction,
   sweepEarningsAction,
   payContributorsAction,

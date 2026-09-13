@@ -199,7 +199,20 @@ export class PolicyEngine {
       }
     }
 
-    // 6. The ceiling across every asset at once.
+    // 6. Unreconciled history. If a previous movement is still open we do not
+    //    know the true balance, so committing more money is guesswork.
+    const open = await this.ledger.openIntents();
+    const blocking = open.filter((e) => e.chainId === movement.chainId);
+    if (blocking.length > 0) {
+      return {
+        verdict: "deny",
+        reason:
+          `${blocking.length} unreconciled movement(s) on chain ${movement.chainId} ` +
+          `(${blocking.map((e) => e.intentId).join(", ")}). Run reconcile first.`,
+      };
+    }
+
+    // 7. The ceiling across every asset at once.
     //
     //    Per-asset caps bound each token; nothing bounds the treasury. Six
     //    assets, each generously capped, add up to no ceiling at all.
@@ -211,7 +224,8 @@ export class PolicyEngine {
     //    the same execution history as every transfer.
     //
     //    Last of the limits, because it costs a price read and there is no
-    //    sense paying for one to reject what the cheap checks already would.
+    //    sense paying for one to reject a movement the cheap checks — or an
+    //    unreconciled ledger — would have rejected anyway.
     const ceiling = this.config.policy.maxPerDayUsd;
     if (ceiling !== undefined) {
       const feed =
@@ -256,19 +270,6 @@ export class PolicyEngine {
         const why = error instanceof ValuationError ? error.message : String(error);
         return { verdict: "deny", reason: `could not value this movement: ${why}` };
       }
-    }
-
-    // 7. Unreconciled history. If a previous movement is still open we do not
-    //    know the true balance, so committing more money is guesswork.
-    const open = await this.ledger.openIntents();
-    const blocking = open.filter((e) => e.chainId === movement.chainId);
-    if (blocking.length > 0) {
-      return {
-        verdict: "deny",
-        reason:
-          `${blocking.length} unreconciled movement(s) on chain ${movement.chainId} ` +
-          `(${blocking.map((e) => e.intentId).join(", ")}). Run reconcile first.`,
-      };
     }
 
     // 8. Human escalation threshold — last, so the reason returned is the most

@@ -16,6 +16,7 @@ import { join } from "node:path";
 
 import { loadConfig, configSchema } from "../src/config.js";
 import { KeeperHubClient } from "../src/keeperhub/client.js";
+import { KeeperHubMcp } from "../src/keeperhub/mcp.js";
 import { Ledger, dailyPeriod } from "../src/ledger/store.js";
 import { PolicyEngine } from "../src/policy/engine.js";
 import { Executor } from "../src/treasury/executor.js";
@@ -163,6 +164,35 @@ async function main(): Promise<void> {
 
   const client = new KeeperHubClient({ apiKey, baseUrl: process.env.KEEPERHUB_BASE_URL });
   const amount = "700000000000"; // 0.0000007 ETH
+
+  // Preflight the platform's budget.
+  //
+  // The live scenarios each move a little real value, and KeeperHub enforces a
+  // daily cap per organisation. Running the suite a few times in a day
+  // exhausts it, and the scenarios then fail for a reason that is not a defect
+  // — which is the worst kind of red, because it teaches you to ignore reds.
+  try {
+    const limits = await new KeeperHubMcp(apiKey).getSpendingLimits();
+    const needed = BigInt(amount) * 4n;
+    console.log(
+      `\nPlatform budget: ${formatUnits(limits.remainingWei, NATIVE_DECIMALS)} of ` +
+        `${formatUnits(limits.effectiveDailyCapWei, NATIVE_DECIMALS)} left today; ` +
+        `this run needs about ${formatUnits(needed, NATIVE_DECIMALS)}.`,
+    );
+    if (limits.remainingWei < needed) {
+      console.log(
+        "\nStopping before the live scenarios: the org's daily cap does not leave enough\n" +
+          "to run them. This is a budget, not a failure — try again tomorrow, or raise the\n" +
+          "cap in KeeperHub.",
+      );
+      summary();
+      return;
+    }
+  } catch (error) {
+    console.log(
+      `\n(could not read the platform budget: ${error instanceof Error ? error.message : String(error)})`,
+    );
+  }
   const recipient = config.contributors[0]!.address;
 
   // --- 5. Crash BEFORE the transfer ran -------------------------------------

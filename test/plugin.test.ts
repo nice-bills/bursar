@@ -63,7 +63,7 @@ describe("plugin manifest", () => {
     assert.ok(bursarPlugin.description.length > 0);
     assert.deepEqual(bursarPlugin.services, [BursarService]);
     assert.deepEqual(bursarPlugin.providers, [treasuryProvider]);
-    assert.equal(bursarPlugin.actions?.length, 6);
+    assert.equal(bursarPlugin.actions?.length, 7);
   });
 
   test("every action has a description, validate, and handler", () => {
@@ -377,6 +377,7 @@ describe("the public surface matches what the docs promise", () => {
     const api = await import("../src/index.js");
     const individual = [
       api.payContributorsAction,
+      api.pendingApprovalsAction,
       api.sweepEarningsAction,
       api.deployYieldAction,
       api.checkFloatAction,

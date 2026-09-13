@@ -113,7 +113,23 @@ process that dies between "money left" and "we wrote it down".
   converted to the API's decimal strings at exactly one boundary. Basis-point
   splits assign the division remainder deterministically, so no wei is lost.
 - **Policy answers only from config and ledger history**, never from the model.
-  Allowlist, per-transfer ceiling, rolling 24h cap. Deny by default.
+  Allowlist, per-asset ceilings, rolling 24h caps, and KeeperHub's own enforced
+  budget. Deny by default.
+- **A ceiling across every asset at once.** Per-asset caps bound each token and
+  nothing bounds the treasury — six assets, each generously capped, add up to
+  no ceiling. `maxPerDayUsd` bounds total value leaving in 24h. The price comes
+  from a Chainlink aggregator read *through KeeperHub*, so the oracle lands in
+  the same execution history as every transfer rather than being a dependency
+  nobody audited. Valuations are recorded with the movement, never recomputed,
+  because a limit that re-prices history at today's rate moves with the market.
+  A stale feed refuses the movement: fails closed.
+- **Approval holds, it does not refuse.** A movement over
+  `requireApprovalAbove` is written to the ledger as `awaiting_approval` and
+  waits for a person — a request that needs sign-off is worthless if it
+  evaporates when the agent gives up. Held movements do not consume the daily
+  caps, because unapproved requests must not starve approved ones, and
+  approving lifts the threshold only: the allowlist and every other check run
+  again on the way through.
 - **Movements are serialised.** A daily cap is a serial invariant: ten payouts
   fired at once will each read the ledger before any writes, all pass, and
   breach the cap tenfold. ElizaOS dispatches actions concurrently, so this is
@@ -302,23 +318,16 @@ Stated plainly, since the submission form asks.
 
 - Testnet only so far. Nothing is chain-specific about the code, but the mainnet
   path has not been exercised.
-- Limits are per asset, so there is no ceiling on total value moved across all
-  of them. Expressing "no more than $X a day, everything included" needs prices,
-  and a treasury that reads a price feed to decide whether it may spend has
-  taken on an oracle as a dependency. Per-asset caps were the honest stopping
-  point.
-- `requireApprovalAbove` returns `needs_approval`, but nothing consumes it —
-  there is no approval path, so in practice it refuses. It is a placeholder for
-  a human-in-the-loop step, not a working one.
 - The ledger lock is advisory and per-file. It stops a second Bursar writing the
   same ledger; it does not stop something else writing that file.
 - Free OpenRouter models are rate-limited and go "temporarily overloaded"
   without warning, so `npm run agent` tries several in turn. With no
   `OPENROUTER_API_KEY` it falls back to a deterministic stub, which exercises
   every plugin surface but cannot show a model choosing the action.
-- KeeperHub enforces a server-side daily spending cap per organisation. Running
-  the full chaos suite repeatedly in one day can exhaust it, and scenarios then
-  fail for that reason rather than a defect.
+- The approval queue has no expiry. A held movement waits indefinitely, which
+  is the right default for money but means a forgotten request stays in the
+  list rather than lapsing.
+- The valuation cache is per process. Two Bursars would each read the feed.
 
 ## Layout
 

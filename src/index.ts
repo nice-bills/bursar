@@ -63,6 +63,7 @@ export { extractAmount, type AmountResult } from "./eliza/amount.js";
 // that reports but never pays is a reasonable thing to want.
 export {
   payContributorsAction,
+  pendingApprovalsAction,
   sweepEarningsAction,
   deployYieldAction,
   checkFloatAction,

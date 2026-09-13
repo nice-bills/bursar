@@ -27,7 +27,9 @@ export type MoveOutcome =
   | { result: "confirmed"; entry: LedgerEntry; transactionHashes: string[] }
   | { result: "failed"; entry: LedgerEntry; error: string }
   | { result: "skipped"; reason: string; intentId: string }
-  | { result: "blocked"; reason: string; verdict: "deny" | "needs_approval" };
+  | { result: "blocked"; reason: string; verdict: "deny" }
+  /** Written down and waiting for a person. Nothing has been sent. */
+  | { result: "held"; intentId: string; reason: string; entry: LedgerEntry };
 
 /**
  * Serialises the policy-check-then-record section.
@@ -85,8 +87,9 @@ export class Executor {
     period: string,
     nonce?: string,
     submit?: Submit,
+    existingIntentId?: string,
   ): Promise<MoveOutcome> {
-    const intentId = Ledger.intentId({
+    const intentId = existingIntentId ?? Ledger.intentId({
       leg: movement.leg,
       chainId: movement.chainId,
       to: movement.to,
@@ -105,13 +108,6 @@ export class Executor {
       };
     }
 
-    const decision = await this.policy.evaluate(movement);
-    if (decision.verdict !== "allow") {
-      return { result: "blocked", reason: decision.reason, verdict: decision.verdict };
-    }
-
-    // Record the intent BEFORE submitting. If the process dies on the next
-    // line, reconcile() can still find this and ask the chain what happened.
     const base = {
       intentId,
       leg: movement.leg,
@@ -123,6 +119,31 @@ export class Executor {
       valueUsdCents: movement.valueUsdCents,
       memo: movement.memo,
     };
+
+    // A movement already released by a person skips straight past the
+    // threshold that held it; that decision is what approval means.
+    const released = await this.ledger.isApproved(intentId);
+
+    const decision = await this.policy.evaluate(movement);
+
+    if (decision.verdict === "deny") {
+      return { result: "blocked", reason: decision.reason, verdict: "deny" };
+    }
+
+    if (decision.verdict === "needs_approval" && !released) {
+      // Held, not refused. Writing it down is the whole point: a request that
+      // needs a person is worthless if it evaporates when the agent gives up,
+      // and a person cannot approve something nobody recorded.
+      const entry = await this.ledger.append({
+        ...base,
+        status: "awaiting_approval",
+        heldReason: decision.reason,
+      });
+      return { result: "held", intentId, reason: decision.reason, entry };
+    }
+
+    // Record the intent BEFORE submitting. If the process dies on the next
+    // line, reconcile() can still find this and ask the chain what happened.
     await this.ledger.append({ ...base, status: "intent" });
 
     let executionId = "";
@@ -193,6 +214,60 @@ export class Executor {
         error: `unresolved after submit: ${message}. Run reconcile before moving more value.`,
       };
     }
+  }
+
+  /** Movements waiting on a person. */
+  pending(): Promise<LedgerEntry[]> {
+    return this.ledger.awaitingApproval();
+  }
+
+  /**
+   * Release a held movement and carry it out.
+   *
+   * Approval is recorded before the money moves, so the decision survives a
+   * crash between deciding and sending, exactly as the intent does.
+   */
+  async approve(intentId: string, decidedBy: string): Promise<MoveOutcome> {
+    return this.mutex.run(async () => {
+      const held = (await this.ledger.latestByIntent()).get(intentId);
+      if (!held || held.status !== "awaiting_approval") {
+        return {
+          result: "blocked" as const,
+          verdict: "deny" as const,
+          reason: held
+            ? `${intentId} is ${held.status}, not awaiting approval`
+            : `no held movement with id ${intentId}`,
+        };
+      }
+
+      await this.ledger.append({ ...held, status: "approved", decidedBy });
+
+      // Re-enter the normal path. Every other check runs again on the way
+      // through — approval lifts the threshold, not the allowlist or the caps.
+      return this.moveExclusive(
+        {
+          leg: held.leg,
+          chainId: held.chainId,
+          to: held.to,
+          amount: held.amount,
+          token: held.token,
+          decimals: held.decimals,
+          memo: held.memo,
+        },
+        "",
+        undefined,
+        undefined,
+        intentId,
+      );
+    });
+  }
+
+  /** Refuse a held movement, so it stops showing up as a decision to make. */
+  async decline(intentId: string, decidedBy: string): Promise<boolean> {
+    const held = (await this.ledger.latestByIntent()).get(intentId);
+    if (!held || held.status !== "awaiting_approval") return false;
+    await this.ledger.append({ ...held, status: "declined", decidedBy });
+    return true;
   }
 
   /**

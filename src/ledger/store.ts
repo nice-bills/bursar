@@ -18,7 +18,16 @@ import { dirname } from "node:path";
 
 export type Leg = "sweep" | "payout" | "float" | "yield";
 
-export type EntryStatus = "intent" | "submitted" | "confirmed" | "failed" | "abandoned";
+export type EntryStatus =
+  | "intent"
+  | "submitted"
+  | "confirmed"
+  | "failed"
+  | "abandoned"
+  /** Held for a human. Nothing has been sent and nothing will be without a decision. */
+  | "awaiting_approval"
+  | "approved"
+  | "declined";
 
 export interface LedgerEntry {
   /** Deterministic id — also used as the KeeperHub idempotency key. */
@@ -44,11 +53,24 @@ export interface LedgerEntry {
   valueUsdCents?: string;
   /** Free-text: contributor name, "gas top-up", etc. */
   memo: string;
+  /** Why a movement was held, so whoever decides can see what they are deciding. */
+  heldReason?: string;
+  /** Who released or declined it, recorded because an approval is an act. */
+  decidedBy?: string;
   executionId?: string;
   transactionHashes?: string[];
   error?: string;
   at: string;
 }
+
+/**
+ * Statuses where no value left the treasury.
+ *
+ * A held or declined movement has not moved, so counting it against the daily
+ * caps would let a pile of unapproved requests starve the ones that are
+ * approved.
+ */
+const NOT_SPENT = new Set<EntryStatus>(["failed", "abandoned", "awaiting_approval", "declined"]);
 
 /** A crashed holder should not wedge the treasury forever. */
 const LOCK_STALE_MS = 10 * 60 * 1000;
@@ -206,6 +228,19 @@ export class Ledger {
   }
 
   /**
+   * Movements held for a human, oldest first.
+   *
+   * These are not failures. Nothing has been sent, and nothing will be until
+   * someone decides, so they sit apart from the reconciliation path.
+   */
+  async awaitingApproval(): Promise<LedgerEntry[]> {
+    const latest = await this.latestByIntent();
+    return [...latest.values()]
+      .filter((e) => e.status === "awaiting_approval")
+      .sort((a, b) => a.at.localeCompare(b.at));
+  }
+
+  /**
    * Intents that were written but never reached a terminal state. These are the
    * ones that need reconciling against the chain before we move more money.
    */
@@ -227,7 +262,7 @@ export class Ledger {
     const latest = await this.latestByIntent();
     let total = 0n;
     for (const entry of latest.values()) {
-      if (entry.status === "failed" || entry.status === "abandoned") continue;
+      if (NOT_SPENT.has(entry.status)) continue;
       if (new Date(entry.at) < since) continue;
       const sameToken =
         token === null
@@ -250,12 +285,17 @@ export class Ledger {
     const latest = await this.latestByIntent();
     let total = 0n;
     for (const entry of latest.values()) {
-      if (entry.status === "failed" || entry.status === "abandoned") continue;
+      if (NOT_SPENT.has(entry.status)) continue;
       if (new Date(entry.at) < since) continue;
       if (!entry.valueUsdCents) continue;
       total += BigInt(entry.valueUsdCents);
     }
     return total;
+  }
+
+  /** True if a person has released this movement. */
+  async isApproved(intentId: string): Promise<boolean> {
+    return (await this.latestByIntent()).get(intentId)?.status === "approved";
   }
 
   /** True if this exact movement already reached a terminal success. */

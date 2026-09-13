@@ -7,6 +7,8 @@ import { join } from "node:path";
 import { splitByShares, configSchema, type Contributor } from "../src/config.js";
 import { Ledger } from "../src/ledger/store.js";
 import { PolicyEngine } from "../src/policy/engine.js";
+import { Executor } from "../src/treasury/executor.js";
+import type { KeeperHubClient } from "../src/keeperhub/client.js";
 
 const contributors: Contributor[] = [
   { name: "model", address: `0x${"1".repeat(40)}`, shareBps: 5000 },
@@ -479,5 +481,119 @@ describe("PolicyEngine — the platform's cap is the one that binds", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("approval actually escalates", () => {
+  const contributorsTwo = contributors;
+
+  async function withExecutor<T>(
+    fn: (ctx: { executor: Executor; ledger: Ledger; calls: () => number }) => Promise<T>,
+  ): Promise<T> {
+    const dir = await mkdtemp(join(tmpdir(), "bursar-approve-"));
+    try {
+      let calls = 0;
+      const client = {
+        async transfer(_p: unknown, key: string) {
+          calls++;
+          return {
+            executionId: `e-${key.slice(-6)}`, status: "completed",
+            transactionHashes: [`0x${key.slice(-6)}`], transactionLinks: [],
+            transactions: [{ hash: `0x${key.slice(-6)}` }],
+            idempotentReplay: false, output: null, raw: {},
+          };
+        },
+      } as unknown as KeeperHubClient;
+
+      const config = configSchema.parse({
+        treasury: { chainId: 11155111 },
+        contributors: contributorsTwo,
+        policy: {
+          maxPerTransfer: "1000",
+          maxPerDay: "100000",
+          // Anything over 100 needs a person.
+          requireApprovalAbove: "100",
+        },
+      });
+      const ledger = new Ledger(join(dir, "ledger.jsonl"));
+      const executor = new Executor(client, ledger, new PolicyEngine(config, ledger), config);
+      return await fn({ executor, ledger, calls: () => calls });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  const big = {
+    leg: "payout" as const, chainId: 11155111, to: contributors[0]!.address,
+    amount: "500", token: null, decimals: 18, memo: "over the threshold",
+  };
+
+  test("an over-threshold movement is held, written down, and not sent", async () => {
+    await withExecutor(async ({ executor, ledger, calls }) => {
+      const outcome = await executor.move({ ...big }, "p1");
+      assert.equal(outcome.result, "held");
+      assert.equal(calls(), 0, "nothing may reach the network while it is held");
+
+      const pending = await ledger.awaitingApproval();
+      assert.equal(pending.length, 1, "a request needing a person must survive being made");
+      assert.match(pending[0]!.heldReason ?? "", /requireApprovalAbove/);
+    });
+  });
+
+  test("a held movement does not consume the daily cap", async () => {
+    // Otherwise a pile of unapproved requests starves the approved ones.
+    await withExecutor(async ({ executor, ledger }) => {
+      await executor.move({ ...big }, "p1");
+      assert.equal(await ledger.movedSince(new Date(Date.now() - 3600_000)), 0n);
+    });
+  });
+
+  test("approving it sends it, and records who decided", async () => {
+    await withExecutor(async ({ executor, ledger, calls }) => {
+      const held = await executor.move({ ...big }, "p1");
+      assert.equal(held.result, "held");
+      if (held.result !== "held") return;
+
+      const outcome = await executor.approve(held.intentId, "alice");
+      assert.equal(outcome.result, "confirmed");
+      assert.equal(calls(), 1);
+
+      const entries = await ledger.all();
+      const approval = entries.find((e) => e.status === "approved");
+      assert.equal(approval?.decidedBy, "alice", "an approval is an act, so it is attributed");
+    });
+  });
+
+  test("declining it sends nothing and clears the queue", async () => {
+    await withExecutor(async ({ executor, ledger, calls }) => {
+      const held = await executor.move({ ...big }, "p1");
+      if (held.result !== "held") return assert.fail("expected held");
+
+      assert.equal(await executor.decline(held.intentId, "alice"), true);
+      assert.equal(calls(), 0);
+      assert.equal((await ledger.awaitingApproval()).length, 0);
+    });
+  });
+
+  test("approval lifts the threshold, not the allowlist", async () => {
+    await withExecutor(async ({ executor, ledger }) => {
+      // Hand-write a held movement to an address nobody allowed.
+      const intentId = "bursar-forged";
+      await ledger.append({
+        intentId, status: "awaiting_approval", leg: "payout", chainId: 11155111,
+        to: `0x${"9".repeat(40)}`, amount: "500", token: null, decimals: 18,
+        memo: "not on the allowlist", heldReason: "test",
+      });
+
+      const outcome = await executor.approve(intentId, "alice");
+      assert.equal(outcome.result, "blocked", "every other check runs again on approval");
+    });
+  });
+
+  test("approving something that is not held is refused", async () => {
+    await withExecutor(async ({ executor }) => {
+      const outcome = await executor.approve("bursar-nothing", "alice");
+      assert.equal(outcome.result, "blocked");
+    });
   });
 });

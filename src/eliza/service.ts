@@ -396,9 +396,11 @@ export class BursarService extends Service {
               ` — ${outcome.entry.transactionLinks?.[0] ?? outcome.transactionHashes[0] ?? ""}`
             : outcome.result === "blocked"
               ? `blocked: ${outcome.reason}`
-              : outcome.result === "skipped"
-                ? "already swept this period"
-                : `failed: ${outcome.error}`,
+              : outcome.result === "held"
+                ? `held for approval: ${outcome.reason}`
+                : outcome.result === "skipped"
+                  ? "already swept this period"
+                  : `failed: ${outcome.error}`,
       });
     }
 
@@ -511,9 +513,11 @@ export class BursarService extends Service {
             `${outcome.entry.transactionLinks?.[0] ?? outcome.transactionHashes[0] ?? ""}`
           : outcome.result === "blocked"
             ? `blocked: ${outcome.reason}`
-            : outcome.result === "skipped"
-              ? "already supplied this period"
-              : `failed: ${outcome.error}`,
+            : outcome.result === "held"
+              ? `held for approval: ${outcome.reason}`
+              : outcome.result === "skipped"
+                ? "already supplied this period"
+                : `failed: ${outcome.error}`,
     };
   }
 
@@ -547,6 +551,21 @@ export class BursarService extends Service {
     const run = await this.client.executeWorkflow(id, {}, `bal-${id}-${Date.now()}`);
     const final = await this.client.awaitExecution(run.executionId);
     return readErc20Output(final.output);
+  }
+
+  /** Movements held for a person to decide on. */
+  pending(): ReturnType<Executor["pending"]> {
+    return this.executor.pending();
+  }
+
+  /** Release a held movement. The caller is recorded as having decided it. */
+  approve(intentId: string, decidedBy: string): ReturnType<Executor["approve"]> {
+    return this.executor.approve(intentId, decidedBy);
+  }
+
+  /** Refuse a held movement. */
+  decline(intentId: string, decidedBy: string): Promise<boolean> {
+    return this.executor.decline(intentId, decidedBy);
   }
 
   /** Resolve every open intent against the chain. See Executor.reconcile. */
