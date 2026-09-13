@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -391,5 +391,36 @@ describe("the public surface matches what the docs promise", () => {
       );
     }
     assert.equal(individual.length, api.treasuryActions.length);
+  });
+});
+
+describe("the package a consumer installs", () => {
+  test("declares an entry point, and builds one on install", async () => {
+    // dist/ is not committed, so a git install has to build on the way in.
+    // Without `prepare`, `npm install github:...` yields a package whose main
+    // points at nothing — the documented way to adopt this would not work.
+    const pkg = JSON.parse(
+      await readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ) as Record<string, unknown>;
+
+    assert.equal(pkg.private, undefined, "a private package cannot be installed by name");
+    assert.equal(pkg.main, "dist/index.js");
+    assert.equal(pkg.types, "dist/index.d.ts");
+    assert.equal((pkg.scripts as Record<string, string>).prepare, "npm run build");
+  });
+
+  test("ships the config example and character a new user needs", async () => {
+    const pkg = JSON.parse(
+      await readFile(new URL("../package.json", import.meta.url), "utf8"),
+    ) as { files: string[] };
+    for (const needed of ["dist", "bursar.config.example.json", "character"]) {
+      assert.ok(pkg.files.includes(needed), `${needed} must be published`);
+    }
+  });
+
+  test("the README documents the install the package actually supports", async () => {
+    const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+    assert.match(readme, /npm install github:nice-bills\/bursar/);
+    assert.match(readme, /plugin-bursar/);
   });
 });

@@ -1,8 +1,7 @@
 {
   "name": "plugin-bursar",
   "version": "0.1.0",
-  "private": true,
-  "description": "The autonomous CFO for AI agents. MCP in, KeeperHub out.",
+  "description": "An onchain treasury for ElizaOS agents. Revenue splits, a gas keeper, and surplus into Aave, executed and audited through KeeperHub.",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -18,7 +17,8 @@
     "workflow": "tsx scripts/workflow.ts",
     "chaos": "tsx scripts/chaos.ts",
     "agent": "tsx scripts/agent.ts",
-    "context-cost": "tsx scripts/context-cost.ts"
+    "context-cost": "tsx scripts/context-cost.ts",
+    "prepare": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -44,7 +44,9 @@
   "files": [
     "dist",
     "README.md",
-    "bursar.config.example.json"
+    "LICENSE",
+    "bursar.config.example.json",
+    "character"
   ],
   "exports": {
     ".": {
@@ -54,5 +56,18 @@
     },
     "./package.json": "./package.json"
   },
-  "packageManager": "npm@11.19.0"
+  "packageManager": "npm@11.19.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nice-bills/bursar.git"
+  },
+  "keywords": [
+    "elizaos",
+    "elizaos-plugin",
+    "keeperhub",
+    "agent",
+    "treasury",
+    "web3"
+  ]
 }

@@ -212,6 +212,60 @@ around the policy engine because it is "not really a transfer" is exactly how
 that kind of hole gets made. The approval is scoped to the amount being
 supplied rather than granted without limit.
 
+## Adding it to your agent
+
+Bursar is an ordinary ElizaOS plugin. Install it, name it in your character, and
+give it a treasury to govern.
+
+```bash
+npm install github:nice-bills/bursar
+cp node_modules/plugin-bursar/bursar.config.example.json bursar.config.json
+```
+
+Name it in your character, alongside whatever else you run:
+
+```jsonc
+{
+  "name": "YourAgent",
+  "plugins": ["@elizaos/plugin-sql", "@elizaos/plugin-bootstrap", "plugin-bursar"]
+}
+```
+
+Or mount it directly, if you build the runtime yourself:
+
+```ts
+import bursarPlugin from "plugin-bursar";
+
+const runtime = new AgentRuntime({
+  character,
+  plugins: [sqlPlugin, modelPlugin, bootstrapPlugin, bursarPlugin],
+  settings: { KEEPERHUB_API_KEY: process.env.KEEPERHUB_API_KEY },
+});
+```
+
+Two environment variables, one of them optional:
+
+```bash
+KEEPERHUB_API_KEY=kh_...            # app.keeperhub.com -> API Keys
+BURSAR_CONFIG_PATH=bursar.config.json   # optional, this is the default
+BURSAR_LEDGER_PATH=data/ledger.jsonl    # optional, this is the default
+```
+
+Your agent gains seven actions — `PAY_CONTRIBUTORS`, `SWEEP_EARNINGS`,
+`DEPLOY_SURPLUS`, `CHECK_GAS_FLOAT`, `RECONCILE_TREASURY`, `REVIEW_PENDING`,
+`TREASURY_REPORT` — and a `TREASURY` provider that puts the balance, the splits
+and the limits into its context before it reasons.
+
+**`bursar.config.json` is the security boundary, not a settings file.** It names
+who may be paid and the ceilings that apply, and the agent cannot raise them: an
+address that is not listed cannot receive value, and an amount over the cap is
+refused no matter how the request is phrased. Treat it the way you would treat
+the list of people with keys to the safe.
+
+Bursar refuses to start without it rather than defaulting to something
+permissive, so a misconfigured agent fails at boot instead of at the first
+payout.
+
 ## The demo video
 
 `video/` renders it with Remotion from output this repo produced —
