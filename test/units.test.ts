@@ -175,3 +175,22 @@ describe("execution payloads from both surfaces", () => {
     }
   });
 });
+
+describe("which failures are worth retrying", () => {
+  test("a conflict is retryable, because the idempotency key makes it safe", async () => {
+    // Observed live: a 409 came back for a transfer that had already
+    // succeeded. Retrying is only safe because the key is stable — without it
+    // this is how a treasury pays someone twice.
+    const { KeeperHubError } = await import("../src/keeperhub/client.js");
+    assert.equal(new KeeperHubError("x", 409, null).retryable, true);
+    assert.equal(new KeeperHubError("x", 429, null).retryable, true);
+    assert.equal(new KeeperHubError("x", 503, null).retryable, true);
+  });
+
+  test("a bad request is not, because it will fail identically", async () => {
+    const { KeeperHubError } = await import("../src/keeperhub/client.js");
+    assert.equal(new KeeperHubError("x", 400, null).retryable, false);
+    assert.equal(new KeeperHubError("x", 401, null).retryable, false);
+    assert.equal(new KeeperHubError("x", 404, null).retryable, false);
+  });
+});

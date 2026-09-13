@@ -25,9 +25,19 @@ export class KeeperHubError extends Error {
     this.name = "KeeperHubError";
   }
 
-  /** 429 and 5xx are worth another attempt; 4xx generally is not. */
+  /**
+   * Worth another attempt: rate limits, server faults, and conflicts.
+   *
+   * 409 is the interesting one. KeeperHub returns it while an earlier transfer
+   * from the same wallet is still being broadcast — a second payout in a batch
+   * hits it routinely. Retrying would normally be the dangerous choice, but
+   * every write here carries a stable idempotency key, so the retry either
+   * finds the original execution or is the first to land. Observed live: a 409
+   * came back for a transfer that had in fact succeeded, and only the
+   * idempotency key kept the recovery from paying twice.
+   */
   get retryable(): boolean {
-    return this.status === 429 || this.status >= 500;
+    return this.status === 429 || this.status === 409 || this.status >= 500;
   }
 }
 
