@@ -1,5 +1,8 @@
 # The demo video
 
+`bursar-demo.mp4` is the delivered cut — 61s, 1920x1080. It is committed rather
+than left as a build artefact so the link in a submission keeps working.
+
 Rendered with [Remotion](https://remotion.dev), from output this repo actually
 produced. `captured-run.txt` is the `npm run demo -- --execute` session the
 terminal panels quote, hashes included; they resolve on Sepolia.
