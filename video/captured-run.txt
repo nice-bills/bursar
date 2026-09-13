@@ -1,0 +1,83 @@
+
+> plugin-bursar@0.1.0 demo
+> tsx scripts/demo.ts --execute
+
+
+────────────────────────────────────────────────────────────────────────
+1. Loading plugin-bursar into the runtime
+────────────────────────────────────────────────────────────────────────
+   plugin: bursar
+   service: bursar — Manages the agent's onchain treasury: pays contributors their revenue share, keeps operational gas topped up, and reconciles every movement through KeeperHub.
+   actions: REVIEW_PENDING, DEPLOY_SURPLUS, SWEEP_EARNINGS, PAY_CONTRIBUTORS, CHECK_GAS_FLOAT, RECONCILE_TREASURY, TREASURY_REPORT
+   providers: TREASURY
+
+────────────────────────────────────────────────────────────────────────
+2. What the agent knows before it reasons (TREASURY provider)
+────────────────────────────────────────────────────────────────────────
+   Treasury chain: 11155111. Revenue splits: model-provider 60.0%, tool-author 40.0%. Spending limits: 0.005 per transfer, 0.02 per rolling 24h. Payouts settle on chain 11155111 with MEV-protected submission. All movements reconciled; the treasury can transact.
+   values: {"treasuryAvailable":true,"treasuryLocked":false,"openIntentCount":0,"treasuryChainId":11155111}
+
+────────────────────────────────────────────────────────────────────────
+3. Action gating (validate)
+────────────────────────────────────────────────────────────────────────
+   "pay everyone what we owe them" -> false
+   "pay out 0.0000041" -> true
+   (an action that cannot succeed is never offered to the model)
+
+────────────────────────────────────────────────────────────────────────
+4. PAY_CONTRIBUTORS — distributing 0.0000041 onchain
+────────────────────────────────────────────────────────────────────────
+   Distributing 0.0000041 across 2 contributors:
+     model-provider: 0.00000246 paid — https://sepolia.etherscan.io/tx/0x17df748646a1247bcb73efc033256407752e4531be5b51db044d41b68ea3dd00
+     tool-author: 0.00000164 failed — unresolved after submit: KeeperHub POST /execute/transfer failed: 409 Conflict. Run reconcile before moving more value.
+   Run RECONCILE_TREASURY before attempting further payouts.
+
+   success: false
+
+────────────────────────────────────────────────────────────────────────
+5. SWEEP_EARNINGS — consolidating token earnings into the treasury
+────────────────────────────────────────────────────────────────────────
+   Sweeping earnings into the treasury:
+     WETH: below the 0.00001 WETH threshold
+
+────────────────────────────────────────────────────────────────────────
+6. DEPLOY_SURPLUS — supplying surplus above the buffer to Aave v3
+────────────────────────────────────────────────────────────────────────
+   Surplus deployment — LINK: no surplus above the 5 buffer
+
+────────────────────────────────────────────────────────────────────────
+7. CHECK_GAS_FLOAT — installing the gas keeper that runs without the agent
+────────────────────────────────────────────────────────────────────────
+   Gas keeper:
+     chain 11155111 0x8d9abc5b07917229159886be02e5eed1dc7fbdc9: keeper installed, running hourly; balance is above the 0.01 floor
+
+────────────────────────────────────────────────────────────────────────
+8. TREASURY_REPORT — where the money went
+────────────────────────────────────────────────────────────────────────
+   2026-09-10T03:45:27.978Z  confirmed payout 0.0000015 -> 0x1111111111111111111111111111111111111111  https://sepolia.etherscan.io/tx/0xf044678e3d72c312d6bdba880b41a76fd012624b899077096e62204590342bbd
+   2026-09-10T03:45:40.256Z  confirmed payout 0.0000009 -> 0x2222222222222222222222222222222222222222  https://sepolia.etherscan.io/tx/0xd025aff1846711621e015e07f19c7512b3fec9b2989fc7d195f6b4f809524281
+   2026-09-10T03:45:51.609Z  confirmed payout 0.0000006 -> 0x3333333333333333333333333333333333333333  https://sepolia.etherscan.io/tx/0x65d50e85c5277539fc01c6fa75a1d9bca5a992a4a65aa283837f455f128213ca
+   2026-09-10T04:09:28.216Z  confirmed payout 0.0000018 -> 0x069C76420DD98cAfa97cc1D349BC1cC708284032  https://sepolia.etherscan.io/tx/0xc74c01140f72d5080a1071abaab64b8dfb1d95a37096bad4bfe8a5ca29a30257
+   2026-09-10T04:09:39.589Z  confirmed payout 0.0000012 -> 0xA9B480C2694aa3F16cd109FCD2C91aCbf3BC689F  https://sepolia.etherscan.io/tx/0xa8b451ef8376498859d6bceb007efa3315ae409d81d738f321a747e294686939
+   2026-09-10T05:10:52.694Z  confirmed sweep  0.0001 -> 0x8d9abc5b07917229159886be02e5eed1dc7fbdc9  https://sepolia.etherscan.io/tx/0xc3e8ab9649ec5220e8df3ea73226b2244eca0df26a7e2fd7db83b2bbd87aeb5d
+   2026-09-10T05:29:44.562Z  failed    yield  10 -> 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951
+   2026-09-10T05:33:03.224Z  confirmed yield  3 -> 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951  [object Object]
+   2026-09-10T05:35:14.658Z  confirmed yield  2 -> 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951  0x2a661d6ee9866a223cf614eef1a6d424d238999f375e2ba34c973e6fc55738d8
+   2026-09-11T05:13:15.053Z  confirmed payout 0.0000018 -> 0x069C76420DD98cAfa97cc1D349BC1cC708284032  https://sepolia.etherscan.io/tx/0x473381dc090e1e7b5b48e275d8416606e7a057051a392070dde11aa9f4df03aa
+   2026-09-11T05:13:40.091Z  confirmed payout 0.0000012 -> 0xA9B480C2694aa3F16cd109FCD2C91aCbf3BC689F  https://sepolia.etherscan.io/tx/0xfc83693fb643eafacfea45be7c1163d806df08148375a429bd9111762d8f9b55
+   2026-09-11T05:13:52.256Z  confirmed sweep  0.0001 -> 0x069C76420DD98cAfa97cc1D349BC1cC708284032  https://sepolia.etherscan.io/tx/0x14832bd5cf9abe8faa7735280f3aa15b5aaec4c2005b760ce9a5584b4696d53e
+   2026-09-13T02:34:03.491Z  confirmed payout 0.0000018 -> 0x069C76420DD98cAfa97cc1D349BC1cC708284032  https://sepolia.etherscan.io/tx/0xf84ffe87c1bf3514fdee4a791f9b030a5831ec05c52bebac4932078c50a5354d
+   2026-09-13T02:34:27.481Z  confirmed payout 0.0000012 -> 0xA9B480C2694aa3F16cd109FCD2C91aCbf3BC689F  https://sepolia.etherscan.io/tx/0xcb2c60918fd91b284cc41ca1f7786572711993e22fdb7be3b14879be5cb14dd0
+   2026-09-13T02:34:50.440Z  confirmed sweep  0.0001 -> 0x069C76420DD98cAfa97cc1D349BC1cC708284032  https://sepolia.etherscan.io/tx/0xf58de5d8a321f1fa1b899f75e010a0bb38735ffb410ea6d3b31db12a1984e285
+   2026-09-13T03:36:14.779Z  confirmed payout 0.00000246 -> 0x069C76420DD98cAfa97cc1D349BC1cC708284032  https://sepolia.etherscan.io/tx/0x17df748646a1247bcb73efc033256407752e4531be5b51db044d41b68ea3dd00
+   2026-09-13T03:36:46.466Z  submitted payout 0.00000164 -> 0xA9B480C2694aa3F16cd109FCD2C91aCbf3BC689F
+   
+   Confirmed totals — payout: 0.00001446, sweep: 0.0003, yield: 5
+   1 movement(s) unreconciled. Treasury is locked until RECONCILE_TREASURY runs.
+
+────────────────────────────────────────────────────────────────────────
+9. RECONCILE_TREASURY — proving the ledger agrees with the chain
+────────────────────────────────────────────────────────────────────────
+   Reconciled 1 of 1 open movement(s).
+     bursar-806054d04f6616503640bdbd5f17e219: confirmed, already executed (0x8f8c37284de3028682e848bd8fa355e9fe7d1a6f6ba5243c97d96ab2f3824503)
+   Treasury is unlocked.

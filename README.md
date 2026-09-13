@@ -212,6 +212,12 @@ around the policy engine because it is "not really a transfer" is exactly how
 that kind of hole gets made. The approval is scoped to the amount being
 supplied rather than granted without limit.
 
+## The demo video
+
+`video/` renders it with Remotion from output this repo produced —
+`video/captured-run.txt` is the session its terminal panels quote, hashes
+included. `cd video && npm install && npm run render`.
+
 ## Setup
 
 ```bash
