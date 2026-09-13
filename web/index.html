@@ -1,33 +1,37 @@
-<title>Bursar Plate</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bursar — Sheet L-001</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,300;1,6..72,400&family=Barlow+Semi+Condensed:wght@400;500;600&display=swap">
 
 <style>
   /*
-    The page is the plate. A single full bleed ASCII painting runs behind
-    everything and the content rides on top of it. One committed visual world,
-    so every colour is painted explicitly rather than inherited from the host.
+    A drafting sheet for money.
+
+    A bursar keeps books, so the page is drawn the way a drawing is: a ruled
+    border, a title block, dimension lines that carry the real limits, and a
+    schematic of where value actually goes. Everything numbered is a number the
+    system produced.
   */
   :root {
-    --paper:   #fdf6e6;
-    --indigo:  #12183f;
-    --slate:   #4a4f7a;
-    --rule:    #12183f;
+    --ink:        #142a63;   /* the sheet */
+    --ink-deep:   #0e1f4b;
+    --ink-raised: #1a3474;
 
-    --ultramarine: #1f3ccc;
-    --cobalt:      #3f72e8;
-    --gold:        #f5a524;
-    --amber:       #ffcf72;
-    --coral:       #f0603c;
+    --line:       rgba(226, 236, 252, .30);
+    --line-soft:  rgba(226, 236, 252, .14);
+    --chalk:      #e8effb;   /* primary text */
+    --chalk-dim:  #a9bce0;   /* secondary text */
+    --coral:      #ef6a52;   /* the one accent */
 
-    --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
-    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --serif: "Newsreader", Georgia, "Times New Roman", serif;
+    --label: "Barlow Semi Condensed", "Helvetica Neue", Arial, sans-serif;
 
-    --gutter: clamp(1.25rem, 4vw, 3.5rem);
-    --max: 1240px;
+    --gutter: clamp(1rem, 3.5vw, 3rem);
+    --max: 1180px;
 
-    color-scheme: light;
+    color-scheme: dark;
   }
 
   *, *::before, *::after { box-sizing: border-box; }
@@ -36,516 +40,550 @@
 
   body {
     margin: 0;
-    background: var(--paper);
-    color: var(--indigo);
-    font-family: var(--display);
-    font-size: 16px;
-    line-height: 1.6;
+    background: var(--ink);
+    color: var(--chalk-dim);
+    font-family: var(--serif);
+    font-size: 17px;
+    font-weight: 300;
+    line-height: 1.65;
     -webkit-font-smoothing: antialiased;
-    overflow-x: hidden;
   }
 
-  /* The painting. Fixed, so the page scrolls across it like a window. */
-  #plate {
-    position: fixed;
-    inset: 0;
-    z-index: 0;
-    background-image: url("plate.jpg");
-    background-size: cover;
-    background-position: center 38%;
-    background-repeat: no-repeat;
-    background-color: #0b1d5c;
-    /* Keeps the dither crisp instead of smoothing it away when it scales up. */
-    image-rendering: pixelated;
+  /* The sheet border, ruled inside the viewport like a drawing frame. */
+  .sheet {
+    border: 1px solid var(--line);
+    margin: clamp(.5rem, 1.4vw, 1rem);
+    position: relative;
   }
-
-  /* A wash under the hero so cream type holds against the brighter sky. */
-  #plate::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: linear-gradient(
-      to bottom,
-      rgba(5, 10, 36, .18) 0%,
-      rgba(5, 10, 36, .06) 45%,
-      rgba(5, 10, 36, .28) 100%
-    );
-  }
-
-  /* Halftone tooth over the whole surface, art included. */
-  body::after {
-    content: "";
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 4;
-    opacity: .45;
-    background-image: radial-gradient(rgba(18,24,63,.16) 0.5px, transparent 0.6px);
-    background-size: 4px 4px;
-  }
-
-  .layer { position: relative; z-index: 1; }
 
   .shell { max-width: var(--max); margin: 0 auto; padding: 0 var(--gutter); }
+
+  /* ---------- labels ---------- */
+
+  .label,
+  .masthead nav a,
+  .titleblock,
+  .btn,
+  .idx,
+  .sub,
+  .hash,
+  table {
+    font-family: var(--label);
+    font-weight: 500;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+
+  .label {
+    display: block;
+    font-size: .69rem;
+    color: var(--coral);
+    margin: 0 0 .9rem;
+  }
 
   /* ---------- masthead ---------- */
 
   .masthead {
-    position: sticky;
-    top: 0;
-    z-index: 3;
-    background: rgba(253, 246, 230, .92);
-    backdrop-filter: blur(6px);
-    border-bottom: 2px solid var(--rule);
-  }
-
-  .masthead .shell {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 2rem;
-    height: 64px;
+    padding: 1.5rem 0 1.4rem;
+    border-bottom: 1px solid var(--line);
   }
 
   .wordmark {
-    font-family: var(--display);
-    font-weight: 900;
-    font-size: 1.15rem;
-    letter-spacing: -.01em;
-    text-transform: uppercase;
+    font-family: var(--serif);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 1.5rem;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--chalk);
   }
 
-  .wordmark span { color: var(--ultramarine); }
+  .masthead nav { display: flex; gap: 1.8rem; font-size: .72rem; }
+  .masthead a { color: var(--chalk-dim); text-decoration: none; white-space: nowrap; }
+  .masthead a:hover, .masthead a:focus-visible { color: var(--coral); }
 
-  .masthead nav {
-    display: flex;
-    gap: 1.6rem;
-    font-family: var(--mono);
-    font-size: .71rem;
-    font-weight: 700;
-    letter-spacing: .13em;
-    text-transform: uppercase;
-  }
+  @media (max-width: 720px) { .masthead nav a:not(:last-child) { display: none; } }
 
-  .masthead a { color: var(--slate); text-decoration: none; white-space: nowrap; }
-  .masthead a:hover, .masthead a:focus-visible { color: var(--ultramarine); }
-
-  @media (max-width: 760px) { .masthead nav a:not(:last-child) { display: none; } }
-
-  /* ---------- hero: the paper is the mask, the type is the window ---------- */
+  /* ---------- hero ---------- */
 
   .hero {
-    position: relative;
-    z-index: 2;
-    background: var(--paper);
-    border-bottom: 2px solid var(--rule);
-    min-height: calc(100dvh - 64px);
     display: grid;
-    align-content: center;
-    padding: clamp(2rem, 6vh, 4rem) 0;
+    gap: clamp(2rem, 4vw, 3.5rem);
+    padding: clamp(2.5rem, 5vw, 4rem) 0 clamp(2rem, 4vw, 3rem);
   }
 
-  .hero-copy { max-width: none; }
-
-  .hero-foot {
-    display: grid;
-    gap: 1.5rem;
-    margin-top: clamp(1.5rem, 3vw, 2.25rem);
-    padding-top: clamp(1.25rem, 2.5vw, 1.75rem);
-    border-top: 2px solid var(--rule);
-  }
-
-  @media (min-width: 820px) {
-    .hero-foot {
-      grid-template-columns: minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 2.5rem;
-    }
+  @media (min-width: 940px) {
+    .hero { grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); align-items: start; }
   }
 
   h1 {
-    font-weight: 900;
-    /* Poster scale: the headline is the asset, so it runs to the measure. */
-    font-size: clamp(2.9rem, 11.2vw, 9.5rem);
-    line-height: .86;
-    letter-spacing: -.045em;
-    text-transform: uppercase;
-    margin: 0;
-    color: var(--indigo);
-  }
-
-  h1 em { font-style: italic; letter-spacing: -.05em; }
-
-  /*
-    The letters are cut out of the block, and the painting shows through them.
-    `fixed` attachment makes the type's background share the viewport with the
-    painting itself, so the letters line up with what sits behind the page
-    rather than carrying their own crop of it.
-  */
-  @supports ((-webkit-background-clip: text) or (background-clip: text)) {
-    h1 {
-      background-image: url("plate.jpg");
-      background-size: cover;
-      background-position: center 30%;
-      -webkit-background-clip: text;
-      background-clip: text;
-      color: transparent;
-      /*
-        The fill is a photograph, so contrast against the block changes letter
-        by letter. A stroke plus a tight shadow gives every glyph the same edge,
-        whether a cloud or the night sky happens to land inside it.
-      */
-      /* At poster scale the fill carries itself; the stroke only keeps the
-         palest cloud from dissolving into the paper. */
-      -webkit-text-stroke: 1px rgba(18, 24, 63, .35);
-    }
-  }
-
-  .standfirst {
-    margin: 0;
-    max-width: 44ch;
-    font-size: clamp(1rem, 1.45vw, 1.12rem);
-    font-weight: 500;
-    color: var(--slate);
-  }
-
-  .actions { display: flex; flex-wrap: wrap; gap: .7rem; }
-
-  .btn {
-    font-family: var(--mono);
-    font-size: .74rem;
-    font-weight: 700;
-    letter-spacing: .13em;
-    text-transform: uppercase;
-    padding: .9rem 1.6rem;
-    border: 2px solid var(--rule);
-    background: var(--ultramarine);
-    color: #ffffff;
-    text-decoration: none;
-    white-space: nowrap;
-    box-shadow: 5px 5px 0 var(--rule);
-    transition: transform .12s ease, box-shadow .12s ease, background .2s ease;
-  }
-
-  .btn.ghost { background: var(--amber); color: var(--indigo); }
-  .btn:hover { background: var(--coral); color: #ffffff; }
-  .btn.ghost:hover { background: var(--gold); }
-  .btn:active { transform: translate(5px, 5px); box-shadow: 0 0 0 var(--rule); }
-
-  /* ---------- ticker ---------- */
-
-  .ticker {
-    position: relative;
-    z-index: 2;
-    background: var(--indigo);
-    color: var(--paper);
-    border-bottom: 2px solid var(--rule);
-    overflow: hidden;
-    padding: .7rem 0;
-  }
-
-  .ticker-track {
-    display: flex;
-    gap: 3rem;
-    width: max-content;
-    animation: slide 48s linear infinite;
-    font-family: var(--mono);
-    font-size: .74rem;
-    font-weight: 500;
-    letter-spacing: .1em;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-
-  .ticker b { color: var(--amber); font-weight: 700; }
-  .ticker .sep { color: var(--cobalt); }
-  .ticker:hover .ticker-track { animation-play-state: paused; }
-
-  @keyframes slide { to { transform: translateX(-50%); } }
-
-  @media (prefers-reduced-motion: reduce) {
-    .ticker-track { animation: none; }
-  }
-
-  /* ---------- panels: content rides over the art ---------- */
-
-  .panel {
-    background: rgba(253, 246, 230, .90);
-    backdrop-filter: blur(3px);
-    border: 2px solid var(--rule);
-    box-shadow: 12px 12px 0 var(--ultramarine);
-    padding: clamp(1.5rem, 4vw, 3rem);
-    margin-bottom: clamp(3rem, 7vw, 5rem);
-  }
-
-  .panel.gold { box-shadow: 12px 12px 0 var(--gold); }
-  .panel.coral { box-shadow: 12px 12px 0 var(--coral); }
-
-  .spacer { height: clamp(3rem, 10vh, 7rem); }
-
-  h2 {
-    font-weight: 800;
-    font-size: clamp(1.6rem, 3.2vw, 2.4rem);
-    letter-spacing: -.03em;
-    line-height: 1.08;
-    margin: 0 0 .9rem;
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: clamp(2.4rem, 5vw, 3.9rem);
+    line-height: 1.04;
+    letter-spacing: -.02em;
+    color: var(--chalk);
+    margin: 0 0 1.4rem;
     text-wrap: balance;
   }
 
-  .lede { color: var(--slate); max-width: 58ch; margin: 0 0 2rem; }
+  h1 em { font-style: italic; font-weight: 300; }
 
-  .eyebrow {
+  .hero p { margin: 0 0 1.9rem; max-width: 46ch; }
+
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 1.6rem; }
+
+  .btn {
     display: inline-block;
-    font-family: var(--mono);
-    font-size: .65rem;
-    font-weight: 700;
-    letter-spacing: .18em;
-    text-transform: uppercase;
-    background: var(--amber);
-    border: 2px solid var(--rule);
-    padding: .25rem .6rem;
-    margin: 0 0 1rem;
-  }
-
-  /* ---------- the loop ---------- */
-
-  .rail { border-top: 2px solid var(--rule); }
-
-  .leg {
-    display: grid;
-    grid-template-columns: 2.5rem minmax(0, 1fr);
-    gap: 1rem;
-    padding: 1.25rem 0;
-    border-bottom: 1px solid rgba(18,24,63,.22);
-    align-items: start;
-    transition: background .2s ease;
-  }
-
-  @media (min-width: 820px) {
-    .leg { grid-template-columns: 2.5rem minmax(0, 11rem) minmax(0, 1fr) auto; align-items: baseline; }
-  }
-
-  .leg:hover { background: var(--amber); }
-
-  .leg .idx { font-family: var(--mono); font-size: .95rem; font-weight: 700; color: var(--ultramarine); }
-  .leg h3 { margin: 0; font-size: 1.02rem; font-weight: 800; letter-spacing: -.015em; }
-  .leg p { margin: .3rem 0 0; color: var(--slate); font-size: .92rem; max-width: 50ch; }
-  @media (min-width: 820px) { .leg p { margin-top: 0; } }
-
-  .leg .hash {
-    font-family: var(--mono);
-    font-size: .72rem;
-    font-weight: 700;
-    color: var(--ultramarine);
+    font-size: .74rem;
+    padding: .85rem 1.5rem;
+    background: var(--chalk);
+    color: var(--ink-deep);
     text-decoration: none;
-    border-bottom: 2px solid var(--amber);
+    white-space: nowrap;
+    transition: background .18s ease, color .18s ease;
+  }
+
+  .btn:hover, .btn:focus-visible { background: var(--coral); color: var(--chalk); }
+
+  .btn-quiet {
+    font-family: var(--label);
+    font-size: .74rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--chalk);
+    text-decoration: none;
+    border-bottom: 1px solid var(--line);
+    padding-bottom: .3rem;
     white-space: nowrap;
   }
 
-  .leg .hash:hover, .leg .hash:focus-visible { color: var(--coral); border-color: var(--coral); }
+  .btn-quiet:hover, .btn-quiet:focus-visible { color: var(--coral); border-color: var(--coral); }
 
-  /* ---------- transcript ---------- */
+  /* ---------- title block ---------- */
 
-  .transcript { font-family: var(--mono); font-size: .85rem; line-height: 1.75; max-width: 72ch; }
-
-  .transcript .who {
-    display: inline-block;
-    font-size: .61rem;
-    font-weight: 700;
-    letter-spacing: .18em;
-    text-transform: uppercase;
-    color: #ffffff;
-    background: var(--indigo);
-    padding: .15rem .5rem;
-    margin-bottom: .5rem;
+  .titleblock {
+    margin-top: clamp(2rem, 4vw, 2.75rem);
+    border: 1px solid var(--line);
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 30rem;
+    font-size: .68rem;
   }
 
-  .transcript .who.agent { background: var(--ultramarine); }
-  .transcript .said { margin: 0 0 1.4rem; }
-  .transcript .said:last-child { margin-bottom: 0; }
-  .transcript .figure { background: var(--amber); padding: 0 .2em; font-weight: 700; }
+  .titleblock td {
+    border: 1px solid var(--line);
+    padding: .55rem .7rem;
+    color: var(--chalk-dim);
+    white-space: nowrap;
+  }
 
-  /* ---------- ledger table ---------- */
+  .titleblock td.v { color: var(--chalk); font-weight: 600; }
+  .titleblock td.rev { color: var(--coral); }
+
+  /* ---------- the schematic ---------- */
+
+  .plate { position: relative; }
+  .plate svg { display: block; width: 100%; height: auto; }
+
+  .plate figcaption {
+    margin-top: .9rem;
+    font-family: var(--label);
+    font-size: .68rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--chalk-dim);
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    border-top: 1px solid var(--line-soft);
+    padding-top: .55rem;
+  }
+
+  /* ---------- sections ---------- */
+
+  section { padding: clamp(3rem, 6vw, 4.5rem) 0; border-top: 1px solid var(--line); }
+
+  h2 {
+    font-family: var(--serif);
+    font-weight: 300;
+    font-size: clamp(1.7rem, 3.4vw, 2.6rem);
+    line-height: 1.1;
+    letter-spacing: -.015em;
+    color: var(--chalk);
+    margin: 0 0 1rem;
+    text-wrap: balance;
+  }
+
+  h2 em { font-style: italic; }
+
+  .lede { max-width: 56ch; margin: 0 0 2.75rem; }
+
+  /* ---------- schedule of movements ---------- */
+
+  .schedule { display: grid; gap: 0 clamp(2rem, 4vw, 3.5rem); }
+  @media (min-width: 820px) { .schedule { grid-template-columns: 1fr 1fr; } }
+
+  .entry { border-top: 1px solid var(--line); padding: 1.4rem 0 1.6rem; }
+
+  .entry-head { display: flex; align-items: baseline; gap: .85rem; }
+
+  .idx { font-size: .74rem; color: var(--coral); }
+
+  .entry h3 {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 1.45rem;
+    line-height: 1.2;
+    color: var(--chalk);
+    margin: 0;
+  }
+
+  .sub { font-size: .64rem; color: var(--chalk-dim); margin: .2rem 0 .7rem 2.35rem; }
+  .entry p { margin: 0 0 .9rem 2.35rem; font-size: .96rem; }
+
+  .hash {
+    display: inline-block;
+    margin-left: 2.35rem;
+    font-size: .68rem;
+    color: var(--chalk);
+    text-decoration: none;
+    border-bottom: 1px solid var(--coral);
+    padding-bottom: .15rem;
+  }
+
+  .hash:hover, .hash:focus-visible { color: var(--coral); }
+
+  /* ---------- detail blocks ---------- */
+
+  .detail { display: grid; gap: clamp(1.75rem, 4vw, 3.5rem); align-items: center; }
+  @media (min-width: 880px) { .detail { grid-template-columns: minmax(0, .8fr) minmax(0, 1fr); } }
+
+  .detail svg { display: block; width: 100%; height: auto; }
+
+  .transcript { border-left: 1px solid var(--line); padding-left: clamp(1rem, 2.5vw, 1.6rem); }
+
+  .turn { margin: 0 0 1.5rem; }
+  .turn:last-child { margin-bottom: 0; }
+
+  .who {
+    display: block;
+    font-family: var(--label);
+    font-size: .64rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--coral);
+    margin-bottom: .35rem;
+  }
+
+  .turn.agent .who { color: var(--chalk-dim); }
+  .turn p { margin: 0; color: var(--chalk); font-size: 1rem; }
+  .turn.agent p { color: var(--chalk-dim); }
+  .fig { color: var(--coral); font-style: italic; }
+
+  /* ---------- schedule table ---------- */
 
   .scroller { overflow-x: auto; }
 
-  table { border-collapse: collapse; width: 100%; font-family: var(--mono); font-size: .82rem; }
+  table.data { border-collapse: collapse; width: 100%; font-size: .72rem; }
 
-  caption {
+  table.data th, table.data td {
+    border: 1px solid var(--line);
+    padding: .75rem .9rem;
     text-align: left;
-    color: var(--slate);
-    font-family: var(--mono);
-    font-size: .69rem;
-    letter-spacing: .12em;
-    text-transform: uppercase;
-    padding-bottom: .8rem;
+    white-space: nowrap;
   }
 
-  th, td { text-align: left; padding: .8rem 1.25rem .8rem 0; white-space: nowrap; }
-  thead th { border-bottom: 2px solid var(--rule); font-size: .67rem; letter-spacing: .14em; text-transform: uppercase; }
-  tbody th { font-weight: 500; color: var(--slate); font-size: .8rem; }
-  tbody tr { border-bottom: 1px solid rgba(18,24,63,.22); }
-  td { font-variant-numeric: tabular-nums; }
-  td.win span { background: var(--gold); padding: .1rem .45rem; border: 2px solid var(--rule); font-weight: 700; }
+  table.data thead th { color: var(--coral); font-weight: 600; }
+  table.data tbody th { color: var(--chalk-dim); font-weight: 500; }
+  table.data td { color: var(--chalk); font-variant-numeric: tabular-nums; }
+  table.data td.ratio { color: var(--coral); }
 
-  /* ---------- close ---------- */
+  /* ---------- footer ---------- */
 
   footer {
-    background: rgba(18, 24, 63, .92);
-    backdrop-filter: blur(3px);
-    color: var(--paper);
-    border: 2px solid var(--rule);
-    padding: 1.6rem clamp(1.25rem, 4vw, 3rem);
-    margin-bottom: clamp(3rem, 7vw, 5rem);
+    border-top: 1px solid var(--line);
+    padding: 1.5rem 0 1.75rem;
     display: flex;
     flex-wrap: wrap;
-    gap: .75rem 2rem;
+    gap: .6rem 2rem;
     justify-content: space-between;
     align-items: baseline;
-    font-family: var(--mono);
-    font-size: .72rem;
+    font-family: var(--label);
+    font-size: .68rem;
     letter-spacing: .1em;
     text-transform: uppercase;
+    color: var(--chalk-dim);
   }
 
-  footer a { color: var(--amber); text-decoration: none; border-bottom: 2px solid var(--gold); }
-  footer a:hover, footer a:focus-visible { color: #ffffff; border-color: #ffffff; }
+  footer a { color: var(--chalk); text-decoration: none; border-bottom: 1px solid var(--coral); }
+  footer a:hover, footer a:focus-visible { color: var(--coral); }
 
-  :focus-visible { outline: 3px solid var(--coral); outline-offset: 3px; }
+  :focus-visible { outline: 2px solid var(--coral); outline-offset: 3px; }
 
-  .reveal { opacity: 0; transform: translateY(16px); transition: opacity .6s ease, transform .6s ease; }
-  .reveal.seen { opacity: 1; transform: none; }
+  /*
+    Drawn ink is the resting state. The script adds the dash offset and then
+    animates it away, so if the script never runs the drawing is simply there
+    rather than invisible.
+  */
+  @keyframes ink { to { stroke-dashoffset: 0; } }
+
+  .fade { opacity: 0; transition: opacity .7s ease; }
+  .fade.seen { opacity: 1; }
 
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .reveal { opacity: 1; transform: none; transition: none; }
-    .btn, .leg { transition: none; }
+    .fade { opacity: 1; transition: none; }
   }
 </style>
 
-<div id="plate" role="img" aria-label="A dithered halftone painting of a villa under a deep blue sky."></div>
-
-<header class="masthead">
+<div class="sheet">
   <div class="shell">
-    <span class="wordmark">Bur<span>sar</span></span>
-    <nav>
-      <a href="#loop">The loop</a>
-      <a href="#refusal">Refusal</a>
-      <a href="#cost">Context</a>
-      <a href="https://sepolia.etherscan.io/address/0x8d9abc5b07917229159886be02e5eed1dc7fbdc9">Ledger</a>
-    </nav>
-  </div>
-</header>
 
-<section class="hero">
-  <div class="shell">
-    <div class="hero-copy">
-      <h1>The agent earns.<br>Bursar keeps<br><em>the books</em>.</h1>
-      <div class="hero-foot">
-        <p class="standfirst">
-          Revenue split to the people who built it, gas kept topped up, surplus put to work.
-          Every movement settled and audited through KeeperHub.
+    <header class="masthead">
+      <span class="wordmark">Bursar</span>
+      <nav>
+        <a href="#movements">Movements</a>
+        <a href="#refusal">Refusal</a>
+        <a href="#surface">Surface</a>
+        <a href="https://sepolia.etherscan.io/address/0x8d9abc5b07917229159886be02e5eed1dc7fbdc9">Ledger</a>
+      </nav>
+    </header>
+
+    <div class="hero">
+      <div>
+        <span class="label">Sheet L-001 · Flow of funds</span>
+        <h1>An agent can earn.<br>Someone has to <em>keep the books</em>.</h1>
+        <p>
+          Bursar is a treasury for ElizaOS agents. It splits revenue to the people who built the
+          agent, keeps it in gas so it can keep working, and puts the surplus to work — every
+          movement drawn through KeeperHub and written down before it is sent.
         </p>
         <div class="actions">
           <a class="btn" href="https://github.com/nice-bills/bursar">Read the source</a>
-          <a class="btn ghost" href="#loop">See the loop</a>
+          <a class="btn-quiet" href="#movements">Follow the money ↓</a>
         </div>
+
+        <table class="titleblock">
+          <tr>
+            <td>Project</td><td class="v">Bursar</td>
+            <td>Sheet</td><td class="v">L-001</td>
+          </tr>
+          <tr>
+            <td>Chain</td><td class="v">Sepolia · 11155111</td>
+            <td>Scale</td><td class="v">1 : 1</td>
+          </tr>
+          <tr>
+            <td>Drawn by</td><td class="v">plugin-bursar</td>
+            <td class="rev">Rev</td><td class="v rev">∞</td>
+          </tr>
+        </table>
       </div>
+
+      <figure class="plate">
+        <svg viewBox="0 0 620 430" role="img" class="draw" aria-label="A schematic of the treasury: earnings sweep into the treasury, pass a policy gate, and leave as contributor payouts, a gas float, and surplus supplied to Aave.">
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 1 L9 5 L0 9" fill="none" stroke="#ef6a52" stroke-width="1.4"/>
+            </marker>
+            <pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+              <line x1="0" y1="0" x2="0" y2="7" stroke="rgba(239,106,82,.55)" stroke-width="1"/>
+            </pattern>
+          </defs>
+
+          <g fill="none" stroke="rgba(226,236,252,.3)" stroke-width="1">
+            <!-- overall dimension line -->
+            <line x1="20" y1="20" x2="600" y2="20"/>
+            <line x1="20" y1="15" x2="20" y2="25"/>
+            <line x1="600" y1="15" x2="600" y2="25"/>
+
+            <!-- earnings -->
+            <rect x="20" y="60" width="126" height="64"/>
+            <!-- treasury -->
+            <rect x="216" y="52" width="150" height="80"/>
+            <!-- policy gate -->
+            <rect x="240" y="186" width="102" height="52"/>
+            <!-- outputs -->
+            <rect x="436" y="60" width="164" height="60"/>
+            <rect x="436" y="186" width="164" height="60"/>
+            <rect x="436" y="312" width="164" height="60"/>
+            <!-- ledger -->
+            <rect x="20" y="312" width="180" height="60" stroke-dasharray="4 4"/>
+          </g>
+
+          <!-- gate hatching: the one place a movement can be stopped -->
+          <rect x="240" y="186" width="102" height="52" fill="url(#hatch)" stroke="none"/>
+
+          <g fill="none" stroke="#ef6a52" stroke-width="1.2" marker-end="url(#arrow)">
+            <path d="M146 92 L210 92"/>
+            <path d="M291 132 L291 180"/>
+            <path d="M342 212 L392 212 L392 90 L430 90"/>
+            <path d="M342 212 L430 212"/>
+            <path d="M342 212 L392 212 L392 342 L430 342"/>
+            <path d="M240 212 L200 212 L200 306" stroke-dasharray="3 4"/>
+          </g>
+
+          <g font-family="Barlow Semi Condensed, sans-serif" font-size="11" letter-spacing="1.4" fill="#e8effb">
+            <text x="32" y="86">EARNINGS</text>
+            <text x="32" y="104" fill="#a9bce0" font-size="9.5">X402 · MPP · FEES</text>
+
+            <text x="228" y="80">TREASURY</text>
+            <text x="228" y="98" fill="#a9bce0" font-size="9.5">ORG SIGNER</text>
+            <text x="228" y="116" fill="#a9bce0" font-size="9.5">0X8D9A…BDC9</text>
+
+            <text x="252" y="208" fill="#ef6a52">POLICY</text>
+            <text x="252" y="224" fill="#a9bce0" font-size="9.5">ALLOWLIST · CAPS</text>
+
+            <text x="448" y="84">PAYOUT</text>
+            <text x="448" y="102" fill="#a9bce0" font-size="9.5">60 / 40 BY SHARE</text>
+
+            <text x="448" y="210">GAS FLOAT</text>
+            <text x="448" y="228" fill="#a9bce0" font-size="9.5">KEEPERHUB SCHEDULE</text>
+
+            <text x="448" y="336">SURPLUS</text>
+            <text x="448" y="354" fill="#a9bce0" font-size="9.5">AAVE V3 ABOVE BUFFER</text>
+
+            <text x="32" y="338" fill="#a9bce0">INTENT LEDGER</text>
+            <text x="32" y="356" fill="#a9bce0" font-size="9.5">WRITTEN BEFORE SENDING</text>
+
+            <text x="300" y="16" fill="#a9bce0" font-size="9.5" text-anchor="middle">ONE EXECUTOR · ONE IDEMPOTENCY KEY</text>
+          </g>
+
+          <!-- dimension callouts carrying the real limits -->
+          <g fill="none" stroke="rgba(226,236,252,.3)" stroke-width="1">
+            <line x1="366" y1="60" x2="410" y2="60" stroke-dasharray="3 3"/>
+            <line x1="366" y1="120" x2="410" y2="120" stroke-dasharray="3 3"/>
+          </g>
+          <g font-family="Barlow Semi Condensed, sans-serif" font-size="9.5" letter-spacing="1.2" fill="#ef6a52">
+            <text x="374" y="44">0.02 / TRANSFER</text>
+            <text x="374" y="140">0.1 / 24H</text>
+          </g>
+        </svg>
+        <figcaption>
+          <span>Fig. 1 — Flow of funds</span>
+          <span>Every path passes the gate</span>
+        </figcaption>
+      </figure>
     </div>
-  </div>
-</section>
 
-<div class="ticker" aria-hidden="true">
-  <div class="ticker-track"><span><b>PAYOUT</b> 0.0000018 <span class="sep">/</span> MODEL-PROVIDER 60%</span><span><b>PAYOUT</b> 0.0000012 <span class="sep">/</span> TOOL-AUTHOR 40%</span><span><b>SWEEP</b> 0.0001 WETH <span class="sep">/</span> TO TREASURY</span><span><b>YIELD</b> 3 LINK <span class="sep">/</span> AAVE V3</span><span><b>KEEPER</b> 0.000001 <span class="sep">/</span> GAS TOP-UP</span><span><b>RECONCILE</b> REPLAYED <span class="sep">/</span> ORIGINAL TX RETURNED</span><span><b>PAYOUT</b> 0.0000018 <span class="sep">/</span> MODEL-PROVIDER 60%</span><span><b>PAYOUT</b> 0.0000012 <span class="sep">/</span> TOOL-AUTHOR 40%</span><span><b>SWEEP</b> 0.0001 WETH <span class="sep">/</span> TO TREASURY</span><span><b>YIELD</b> 3 LINK <span class="sep">/</span> AAVE V3</span><span><b>KEEPER</b> 0.000001 <span class="sep">/</span> GAS TOP-UP</span><span><b>RECONCILE</b> REPLAYED <span class="sep">/</span> ORIGINAL TX RETURNED</span></div>
-</div>
-
-<div class="layer">
-  <div class="shell">
-    <div class="spacer"></div>
-
-    <section id="loop" class="panel reveal">
-      <p class="eyebrow">Settled on Sepolia</p>
-      <h2>Five movements, each one a transaction</h2>
+    <section id="movements">
+      <span class="label">Schedule of movements · Settled on Sepolia</span>
+      <h2>Five legs, each one <em>a transaction</em></h2>
       <p class="lede">
         Every leg runs through one executor, so all of them inherit the same policy, the same
-        intent ledger, and the same idempotency key. A sixth leg would inherit it too, and could
-        not opt out.
+        intent ledger, and the same idempotency key. A sixth would inherit it too, and could not
+        opt out.
       </p>
 
-      <div class="rail">
-        <article class="leg">
-          <span class="idx">01</span>
-          <h3>Payout</h3>
-          <p>Splits revenue by configured shares, assigning the division remainder deterministically so no wei is lost.</p>
-          <a class="hash" href="https://sepolia.etherscan.io/tx/0xc74c01140f72d5080a1071abaab64b8dfb1d95a37096bad4bfe8a5ca29a30257">0xc74c0114</a>
+      <div class="schedule">
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">01</span><h3>Payout</h3></div>
+          <p class="sub">Revenue → contributors</p>
+          <p>Splits by configured shares, assigning the division remainder deterministically so no wei is lost.</p>
+          <a class="hash" href="https://sepolia.etherscan.io/tx/0xc74c01140f72d5080a1071abaab64b8dfb1d95a37096bad4bfe8a5ca29a30257">0xc74c0114 ↗</a>
         </article>
 
-        <article class="leg">
-          <span class="idx">02</span>
-          <h3>Sweep</h3>
-          <p>Consolidates earnings into the treasury, moving what the ceiling allows and reporting what it held back.</p>
-          <a class="hash" href="https://sepolia.etherscan.io/tx/0x14832bd5cf9abe8faa7735280f3aa15b5aaec4c2005b760ce9a5584b4696d53e">0x14832bd5</a>
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">02</span><h3>Sweep</h3></div>
+          <p class="sub">Earnings → treasury</p>
+          <p>Moves what the per-transfer ceiling allows and reports what it held back, rather than clipping in silence.</p>
+          <a class="hash" href="https://sepolia.etherscan.io/tx/0x14832bd5cf9abe8faa7735280f3aa15b5aaec4c2005b760ce9a5584b4696d53e">0x14832bd5 ↗</a>
         </article>
 
-        <article class="leg">
-          <span class="idx">03</span>
-          <h3>Yield</h3>
-          <p>Supplies surplus above the buffer into Aave v3. The pool must be allowlisted, because a deposit is still value leaving.</p>
-          <a class="hash" href="https://sepolia.etherscan.io/tx/0xb92cb3a3f5b687b072159e60db3bfe97b23faa4da4a0125d07f67c3bcd7bb5c9">0xb92cb3a3</a>
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">03</span><h3>Yield</h3></div>
+          <p class="sub">Surplus → Aave v3</p>
+          <p>Supplies only what sits above the buffer. The pool must be allowlisted, because a deposit is still value leaving.</p>
+          <a class="hash" href="https://sepolia.etherscan.io/tx/0xb92cb3a3f5b687b072159e60db3bfe97b23faa4da4a0125d07f67c3bcd7bb5c9">0xb92cb3a3 ↗</a>
         </article>
 
-        <article class="leg">
-          <span class="idx">04</span>
-          <h3>Gas keeper</h3>
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">04</span><h3>Gas float</h3></div>
+          <p class="sub">Treasury → operating wallet</p>
           <p>Reads, compares and tops up on KeeperHub's own schedule, so it still works while the agent is down.</p>
-          <a class="hash" href="https://sepolia.etherscan.io/tx/0xd0a0cc0cbc0cf134992053196612149e967ed0587df979e66c18705adb5a0914">0xd0a0cc0c</a>
+          <a class="hash" href="https://sepolia.etherscan.io/tx/0xd0a0cc0cbc0cf134992053196612149e967ed0587df979e66c18705adb5a0914">0xd0a0cc0c ↗</a>
         </article>
 
-        <article class="leg">
-          <span class="idx">05</span>
-          <h3>Reconcile</h3>
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">05</span><h3>Reconcile</h3></div>
+          <p class="sub">Unknown → known</p>
           <p>Replays an unresolved movement under its original key. If it already ran, the original transaction comes back rather than a second one.</p>
-          <a class="hash" href="https://sepolia.etherscan.io/tx/0x179a18592959181196d6563a3f8f4f7e7f6d9250a2acecbe9679f34f291434c9">0x179a1859</a>
+          <a class="hash" href="https://sepolia.etherscan.io/tx/0x179a18592959181196d6563a3f8f4f7e7f6d9250a2acecbe9679f34f291434c9">0x179a1859 ↗</a>
+        </article>
+
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">06</span><h3>Statement</h3></div>
+          <p class="sub">Ledger → answer</p>
+          <p>Where did the money go, answered from the ledger with a transaction hash against every line.</p>
         </article>
       </div>
     </section>
 
-    <div class="spacer"></div>
-
-    <section id="refusal" class="panel gold reveal">
-      <h2>The most useful thing it does is say no</h2>
+    <section id="refusal">
+      <span class="label">Detail 1 · The gate</span>
+      <h2>The most useful thing it does <em>is say no</em></h2>
       <p class="lede">
-        Treasury state reaches the model before it reasons, so limits are something the agent
+        Treasury state reaches the model before it reasons, so the limits are something the agent
         knows rather than something it discovers from a failure.
       </p>
 
-      <div class="transcript">
-        <p class="said">
-          <span class="who">Operator</span><br>
-          We earned a lot this week. Please pay out <span class="figure">5</span> to the contributors.
-        </p>
-        <p class="said">
-          <span class="who agent">Treasurer</span><br>
-          The treasury has spending limits configured: <span class="figure">0.02</span> per transfer
-          and <span class="figure">0.1</span> per rolling 24h. A payout of <span class="figure">5</span>
-          would exceed both limits significantly. Would you like to proceed with a smaller amount
-          within the current limits, or adjust the spending limits first?
-        </p>
+      <div class="detail">
+        <svg viewBox="0 0 300 220" class="draw" role="img" aria-label="A request of five meeting the gate and being turned back, against a permitted amount passing through.">
+          <g fill="none" stroke="rgba(226,236,252,.3)" stroke-width="1">
+            <rect x="110" y="20" width="80" height="180" stroke-dasharray="4 4"/>
+            <line x1="20" y1="70" x2="110" y2="70"/>
+            <line x1="20" y1="150" x2="110" y2="150"/>
+            <line x1="190" y1="150" x2="280" y2="150"/>
+          </g>
+          <rect x="110" y="20" width="80" height="180" fill="url(#hatch)" stroke="none"/>
+          <g fill="none" stroke="#ef6a52" stroke-width="1.3">
+            <!-- refused: turned back at the gate -->
+            <path d="M104 70 L88 62 M104 70 L88 78"/>
+            <line x1="104" y1="56" x2="104" y2="84"/>
+            <!-- permitted: passes through -->
+            <path d="M266 150 L252 143 M266 150 L252 157" />
+          </g>
+          <g font-family="Barlow Semi Condensed, sans-serif" font-size="10.5" letter-spacing="1.3" fill="#e8effb">
+            <text x="20" y="60">REQUEST 5</text>
+            <text x="20" y="140">REQUEST 0.000002</text>
+            <text x="118" y="116" fill="#ef6a52">GATE</text>
+            <text x="196" y="140">SETTLED</text>
+            <text x="20" y="88" fill="#ef6a52" font-size="9.5">REFUSED · OVER CAP</text>
+          </g>
+        </svg>
+
+        <div class="transcript">
+          <div class="turn">
+            <span class="who">Operator</span>
+            <p>We earned a lot this week. Please pay out <span class="fig">5</span> to the contributors.</p>
+          </div>
+          <div class="turn agent">
+            <span class="who">Treasurer</span>
+            <p>
+              The treasury has spending limits configured: <span class="fig">0.02</span> per transfer
+              and <span class="fig">0.1</span> per rolling 24h. A payout of <span class="fig">5</span>
+              would exceed both limits significantly. Would you like to proceed with a smaller amount
+              within the current limits, or adjust the spending limits first?
+            </p>
+          </div>
+        </div>
       </div>
     </section>
 
-    <div class="spacer"></div>
-
-    <section id="cost" class="panel coral reveal">
-      <h2>Why mount this instead of the server it calls</h2>
+    <section id="surface">
+      <span class="label">Detail 2 · Surface area</span>
+      <h2>Why mount this instead of <em>the server it calls</em></h2>
       <p class="lede">
         KeeperHub exposes 44 tools over MCP. Bursar calls them from code and puts six actions in
         front of the model, so the traffic stays in the program.
       </p>
 
       <div class="scroller">
-        <table>
-          <caption>Measured against the live server, npm run context-cost</caption>
+        <table class="data">
           <thead>
             <tr>
               <th scope="col">Cost</th>
@@ -559,19 +597,19 @@
               <th scope="row">Resident in every prompt</th>
               <td>13,300 tokens</td>
               <td>950 tokens</td>
-              <td class="win"><span>14x</span></td>
+              <td class="ratio">14 : 1</td>
             </tr>
             <tr>
               <th scope="row">One schema lookup</th>
               <td>120,600 tokens</td>
               <td>370 tokens</td>
-              <td class="win"><span>330x</span></td>
+              <td class="ratio">330 : 1</td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <p class="lede" style="margin:2rem 0 0">
+      <p class="lede" style="margin:2.25rem 0 0">
         The containment matters more than the arithmetic. An agent holding 44 execution tools can
         do anything with the money and has to be asked not to. An agent holding one payout action
         can only pay contributors, by their configured shares, within caps it cannot raise.
@@ -579,27 +617,83 @@
     </section>
 
     <footer>
-      <span>Bursar, for the KeeperHub Agent Economy Hackathon</span>
+      <span>Bursar · KeeperHub Agent Economy Hackathon</span>
       <span><a href="https://github.com/nice-bills/bursar">github.com/nice-bills/bursar</a></span>
     </footer>
+
   </div>
 </div>
 
 <script>
+  /*
+    Drawings ink themselves in when they come into view, and text settles after.
+    Each path is given its own length so the stroke runs at a consistent speed
+    rather than long lines racing short ones.
+  */
   (function () {
-    var items = document.querySelectorAll(".reveal");
-    if (!("IntersectionObserver" in window) ||
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      items.forEach(function (el) { el.classList.add("seen"); });
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    function prime(svg) {
+      var strokes = svg.querySelectorAll("path, line, rect, circle, polyline");
+      strokes.forEach(function (el) {
+        // A dashed line is dashed on purpose; animating it would erase that.
+        if (el.getAttribute("stroke-dasharray")) return;
+        var len = 0;
+        try { len = el.getTotalLength ? el.getTotalLength() : 0; } catch (e) { len = 0; }
+        if (!len) {
+          var box = null;
+          try { box = el.getBBox(); } catch (e) { box = null; }
+          len = box ? (box.width + box.height) * 2 : 400;
+        }
+        len = Math.ceil(len) || 400;
+        el.style.strokeDasharray = len;
+        el.style.strokeDashoffset = len;
+        el.style.animation = "ink " + Math.min(2.2, 0.35 + len / 900).toFixed(2) +
+          "s ease " + (Math.random() * 0.3).toFixed(2) + "s forwards";
+        el.style.animationPlayState = "paused";
+      });
+      return strokes;
+    }
+
+    if (!reduced) document.querySelectorAll(".draw").forEach(prime);
+
+    if (reduced || !("IntersectionObserver" in window)) {
+      document.querySelectorAll(".fade").forEach(function (el) { el.classList.add("seen"); });
       return;
     }
+
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (e) {
         if (!e.isIntersecting) return;
-        e.target.classList.add("seen");
-        io.unobserve(e.target);
+        var el = e.target;
+        if (el.classList.contains("draw")) {
+          el.querySelectorAll("path, line, rect, circle, polyline").forEach(function (p) {
+            p.style.animationPlayState = "running";
+          });
+        } else {
+          el.classList.add("seen");
+        }
+        io.unobserve(el);
       });
-    }, { threshold: 0.1, rootMargin: "0px 0px -6% 0px" });
-    items.forEach(function (el) { io.observe(el); });
+    }, { threshold: 0, rootMargin: "0px 0px -4% 0px" });
+
+    function run(el) {
+      if (el.classList.contains("draw")) {
+        el.querySelectorAll("path, line, rect, circle, polyline").forEach(function (p) {
+          p.style.animationPlayState = "running";
+        });
+      } else {
+        el.classList.add("seen");
+      }
+    }
+
+    document.querySelectorAll(".draw, .fade").forEach(function (el) {
+      // A tall drawing can be on screen at load without ever crossing a
+      // threshold, which would leave it primed and invisible. Start anything
+      // already in view and observe the rest.
+      var r = el.getBoundingClientRect();
+      if (r.top < window.innerHeight && r.bottom > 0) run(el);
+      else io.observe(el);
+    });
   })();
 </script>
