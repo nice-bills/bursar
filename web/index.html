@@ -116,8 +116,13 @@
     padding: clamp(2.5rem, 5vw, 4rem) 0 clamp(2rem, 4vw, 3rem);
   }
 
-  @media (min-width: 940px) {
-    .hero { grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); align-items: start; }
+  @media (min-width: 880px) {
+    .hero-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, auto);
+      gap: clamp(2rem, 5vw, 4.5rem);
+      align-items: end;
+    }
   }
 
   h1 {
@@ -167,11 +172,12 @@
   /* ---------- title block ---------- */
 
   .titleblock {
-    margin-top: clamp(2rem, 4vw, 2.75rem);
+    margin-top: clamp(1.5rem, 3vw, 2rem);
     border: 1px solid var(--line);
     border-collapse: collapse;
     width: 100%;
-    max-width: 30rem;
+    width: auto;
+    min-width: 22rem;
     font-size: .68rem;
   }
 
@@ -228,7 +234,15 @@
   .schedule { display: grid; gap: 0 clamp(2rem, 4vw, 3.5rem); }
   @media (min-width: 820px) { .schedule { grid-template-columns: 1fr 1fr; } }
 
-  .entry { border-top: 1px solid var(--line); padding: 1.4rem 0 1.6rem; }
+  .entry {
+    border-top: 1px solid var(--line);
+    padding: 1.4rem 0 1.6rem;
+    transition: border-color .25s ease;
+  }
+
+  .entry:hover { border-top-color: var(--coral); }
+  .entry:hover h3 { color: var(--coral); }
+  .entry h3 { transition: color .25s ease; }
 
   .entry-head { display: flex; align-items: baseline; gap: .85rem; }
 
@@ -332,12 +346,24 @@
   */
   @keyframes ink { to { stroke-dashoffset: 0; } }
 
-  .fade { opacity: 0; transition: opacity .7s ease; }
-  .fade.seen { opacity: 1; }
+  /*
+    Structure inks itself in; flow keeps moving. The marching dash is the one
+    perpetual animation on the page and it earns its place by saying the thing
+    the product claims — that value moves, continuously, through the gate.
+  */
+  .flow { animation: march 1.5s linear infinite; }
+  @keyframes march { to { stroke-dashoffset: -28; } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .flow { animation: none; }
+  }
+
+  .fade { opacity: 0; transform: translateY(10px); transition: opacity .6s ease, transform .6s cubic-bezier(.2,.7,.3,1); }
+  .fade.seen { opacity: 1; transform: none; }
 
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .fade { opacity: 1; transition: none; }
+    .fade { opacity: 1; transform: none; transition: none; }
   }
 </style>
 
@@ -355,17 +381,19 @@
     </header>
 
     <div class="hero">
-      <div>
-        <span class="label">Sheet L-001 · Flow of funds</span>
-        <h1>An agent can earn.<br>Someone has to <em>keep the books</em>.</h1>
-        <p>
-          Bursar is a treasury for ElizaOS agents. It splits revenue to the people who built the
-          agent, keeps it in gas so it can keep working, and puts the surplus to work — every
-          movement drawn through KeeperHub and written down before it is sent.
-        </p>
-        <div class="actions">
-          <a class="btn" href="https://github.com/nice-bills/bursar">Read the source</a>
-          <a class="btn-quiet" href="#movements">Follow the money ↓</a>
+      <div class="hero-top">
+        <div>
+          <span class="label">Sheet L-001 · Flow of funds</span>
+          <h1>An agent can earn.<br>Someone has to<br><em>keep the books</em>.</h1>
+          <p>
+            Bursar is a treasury for ElizaOS agents. It splits revenue to the people who built the
+            agent, keeps it in gas so it can keep working, and puts the surplus to work — every
+            movement drawn through KeeperHub and written down before it is sent.
+          </p>
+          <div class="actions">
+            <a class="btn" href="https://github.com/nice-bills/bursar">Read the source</a>
+            <a class="btn-quiet" href="#movements">Follow the money ↓</a>
+          </div>
         </div>
 
         <table class="titleblock">
@@ -385,87 +413,98 @@
       </div>
 
       <figure class="plate">
-        <svg viewBox="0 0 620 430" role="img" class="draw" aria-label="A schematic of the treasury: earnings sweep into the treasury, pass a policy gate, and leave as contributor payouts, a gas float, and surplus supplied to Aave.">
+        <svg viewBox="0 0 1180 440" class="draw" role="img" aria-label="Flow of funds: earnings sweep into the treasury, every movement leaving passes a policy gate, and the outputs are contributor payouts, a gas float and surplus supplied to Aave. The intent ledger records each movement before it is sent.">
           <defs>
             <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-              <path d="M0 1 L9 5 L0 9" fill="none" stroke="#ef6a52" stroke-width="1.4"/>
+              <path d="M0 1.5 L9 5 L0 8.5" fill="none" stroke="#ef6a52" stroke-width="1.5"/>
             </marker>
-            <pattern id="hatch" width="7" height="7" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
-              <line x1="0" y1="0" x2="0" y2="7" stroke="rgba(239,106,82,.55)" stroke-width="1"/>
+            <pattern id="hatch" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+              <line x1="0" y1="0" x2="0" y2="8" stroke="rgba(239,106,82,.5)" stroke-width="1"/>
             </pattern>
           </defs>
 
+          <!-- overall dimension line across the sheet -->
           <g fill="none" stroke="rgba(226,236,252,.3)" stroke-width="1">
-            <!-- overall dimension line -->
-            <line x1="20" y1="20" x2="600" y2="20"/>
-            <line x1="20" y1="15" x2="20" y2="25"/>
-            <line x1="600" y1="15" x2="600" y2="25"/>
+            <line x1="40" y1="26" x2="1140" y2="26"/>
+            <line x1="40" y1="19" x2="40" y2="33"/>
+            <line x1="1140" y1="19" x2="1140" y2="33"/>
+          </g>
+          <text x="590" y="20" text-anchor="middle" font-family="Barlow Semi Condensed, sans-serif" font-size="12" letter-spacing="1.8" fill="#a9bce0">ONE EXECUTOR · ONE IDEMPOTENCY KEY · ONE LEDGER</text>
 
-            <!-- earnings -->
-            <rect x="20" y="60" width="126" height="64"/>
-            <!-- treasury -->
-            <rect x="216" y="52" width="150" height="80"/>
-            <!-- policy gate -->
-            <rect x="240" y="186" width="102" height="52"/>
-            <!-- outputs -->
-            <rect x="436" y="60" width="164" height="60"/>
-            <rect x="436" y="186" width="164" height="60"/>
-            <rect x="436" y="312" width="164" height="60"/>
-            <!-- ledger -->
-            <rect x="20" y="312" width="180" height="60" stroke-dasharray="4 4"/>
+          <!-- boxes -->
+          <g fill="none" stroke="rgba(226,236,252,.32)" stroke-width="1">
+            <rect x="40" y="96" width="212" height="92"/>
+            <rect x="374" y="84" width="244" height="116"/>
+            <rect x="414" y="264" width="164" height="76"/>
+            <rect x="808" y="70" width="332" height="84"/>
+            <rect x="808" y="182" width="332" height="84"/>
+            <rect x="808" y="294" width="332" height="84"/>
+            <rect x="40" y="286" width="252" height="92" stroke-dasharray="5 5"/>
           </g>
 
-          <!-- gate hatching: the one place a movement can be stopped -->
-          <rect x="240" y="186" width="102" height="52" fill="url(#hatch)" stroke="none"/>
+          <rect x="414" y="264" width="164" height="76" fill="url(#hatch)" stroke="none"/>
 
-          <g fill="none" stroke="#ef6a52" stroke-width="1.2" marker-end="url(#arrow)">
-            <path d="M146 92 L210 92"/>
-            <path d="M291 132 L291 180"/>
-            <path d="M342 212 L392 212 L392 90 L430 90"/>
-            <path d="M342 212 L430 212"/>
-            <path d="M342 212 L392 212 L392 342 L430 342"/>
-            <path d="M240 212 L200 212 L200 306" stroke-dasharray="3 4"/>
+          <!-- flow: marching dashes, because value keeps moving -->
+          <g fill="none" stroke="#ef6a52" stroke-width="1.6" stroke-dasharray="6 10" class="flow" marker-end="url(#arrow)">
+            <path d="M252 142 L366 142"/>
+            <path d="M496 200 L496 258"/>
+            <path d="M578 302 L690 302 L690 112 L800 112"/>
+            <path d="M578 302 L690 302 L690 224 L800 224"/>
+            <path d="M578 302 L690 302 L690 336 L800 336"/>
           </g>
 
-          <g font-family="Barlow Semi Condensed, sans-serif" font-size="11" letter-spacing="1.4" fill="#e8effb">
-            <text x="32" y="86">EARNINGS</text>
-            <text x="32" y="104" fill="#a9bce0" font-size="9.5">X402 · MPP · FEES</text>
-
-            <text x="228" y="80">TREASURY</text>
-            <text x="228" y="98" fill="#a9bce0" font-size="9.5">ORG SIGNER</text>
-            <text x="228" y="116" fill="#a9bce0" font-size="9.5">0X8D9A…BDC9</text>
-
-            <text x="252" y="208" fill="#ef6a52">POLICY</text>
-            <text x="252" y="224" fill="#a9bce0" font-size="9.5">ALLOWLIST · CAPS</text>
-
-            <text x="448" y="84">PAYOUT</text>
-            <text x="448" y="102" fill="#a9bce0" font-size="9.5">60 / 40 BY SHARE</text>
-
-            <text x="448" y="210">GAS FLOAT</text>
-            <text x="448" y="228" fill="#a9bce0" font-size="9.5">KEEPERHUB SCHEDULE</text>
-
-            <text x="448" y="336">SURPLUS</text>
-            <text x="448" y="354" fill="#a9bce0" font-size="9.5">AAVE V3 ABOVE BUFFER</text>
-
-            <text x="32" y="338" fill="#a9bce0">INTENT LEDGER</text>
-            <text x="32" y="356" fill="#a9bce0" font-size="9.5">WRITTEN BEFORE SENDING</text>
-
-            <text x="300" y="16" fill="#a9bce0" font-size="9.5" text-anchor="middle">ONE EXECUTOR · ONE IDEMPOTENCY KEY</text>
+          <!-- the ledger records rather than moves, so its line is dashed and still -->
+          <g fill="none" stroke="rgba(226,236,252,.32)" stroke-width="1" stroke-dasharray="4 5" marker-end="url(#arrow)">
+            <path d="M414 302 L300 302"/>
           </g>
 
-          <!-- dimension callouts carrying the real limits -->
-          <g fill="none" stroke="rgba(226,236,252,.3)" stroke-width="1">
-            <line x1="366" y1="60" x2="410" y2="60" stroke-dasharray="3 3"/>
-            <line x1="366" y1="120" x2="410" y2="120" stroke-dasharray="3 3"/>
+          <g font-family="Barlow Semi Condensed, sans-serif" letter-spacing="1.6" fill="#e8effb">
+            <text x="60" y="130" font-size="15">EARNINGS</text>
+            <text x="60" y="152" font-size="11.5" fill="#a9bce0">X402 · MPP · FEES</text>
+            <text x="60" y="172" font-size="11.5" fill="#a9bce0">BASE · TEMPO</text>
+
+            <text x="396" y="122" font-size="15">TREASURY</text>
+            <text x="396" y="146" font-size="11.5" fill="#a9bce0">ORG SIGNER · TURNKEY</text>
+            <text x="396" y="166" font-size="11.5" fill="#a9bce0">0X8D9ABC…FBDC9</text>
+            <text x="396" y="186" font-size="11.5" fill="#a9bce0">SEPOLIA · 11155111</text>
+
+            <text x="434" y="296" font-size="15" fill="#ef6a52">POLICY</text>
+            <text x="434" y="316" font-size="11.5" fill="#a9bce0">ALLOWLIST · CAPS</text>
+            <text x="434" y="332" font-size="11.5" fill="#a9bce0">RECONCILED FIRST</text>
+
+            <text x="830" y="104" font-size="15">PAYOUT</text>
+            <text x="830" y="126" font-size="11.5" fill="#a9bce0">60 / 40 BY CONFIGURED SHARE</text>
+            <text x="830" y="144" font-size="11.5" fill="#a9bce0">REMAINDER TO THE LARGEST HOLDER</text>
+
+            <text x="830" y="216" font-size="15">GAS FLOAT</text>
+            <text x="830" y="238" font-size="11.5" fill="#a9bce0">KEEPERHUB SCHEDULE · HOURLY</text>
+            <text x="830" y="256" font-size="11.5" fill="#a9bce0">RUNS WHILE THE AGENT IS DOWN</text>
+
+            <text x="830" y="328" font-size="15">SURPLUS</text>
+            <text x="830" y="350" font-size="11.5" fill="#a9bce0">AAVE V3 ABOVE THE BUFFER</text>
+            <text x="830" y="368" font-size="11.5" fill="#a9bce0">POOL MUST BE ALLOWLISTED</text>
+
+            <text x="60" y="320" font-size="15" fill="#a9bce0">INTENT LEDGER</text>
+            <text x="60" y="342" font-size="11.5" fill="#a9bce0">WRITTEN BEFORE SENDING</text>
+            <text x="60" y="360" font-size="11.5" fill="#a9bce0">REPLAYED TO RECONCILE</text>
           </g>
-          <g font-family="Barlow Semi Condensed, sans-serif" font-size="9.5" letter-spacing="1.2" fill="#ef6a52">
-            <text x="374" y="44">0.02 / TRANSFER</text>
-            <text x="374" y="140">0.1 / 24H</text>
+
+          <!-- dimension callouts carrying the enforced limits -->
+          <g fill="none" stroke="rgba(226,236,252,.3)" stroke-width="1" stroke-dasharray="3 3">
+            <line x1="618" y1="84" x2="700" y2="84"/>
+            <line x1="618" y1="200" x2="700" y2="200"/>
+          </g>
+          <g font-family="Barlow Semi Condensed, sans-serif" font-size="11.5" letter-spacing="1.4" fill="#ef6a52">
+            <text x="628" y="76">0.02 PER TRANSFER</text>
+            <text x="628" y="220">0.1 PER ROLLING 24H</text>
+          </g>
+          <g font-family="Barlow Semi Condensed, sans-serif" font-size="11" letter-spacing="1.4" fill="#a9bce0">
+            <text x="700" y="416">EVERY PATH LEAVING THE TREASURY CROSSES THE GATE</text>
           </g>
         </svg>
         <figcaption>
           <span>Fig. 1 — Flow of funds</span>
-          <span>Every path passes the gate</span>
+          <span>Sepolia · 11155111</span>
         </figcaption>
       </figure>
     </div>
@@ -582,6 +621,159 @@
         front of the model, so the traffic stays in the program.
       </p>
 
+      <figure class="plate">
+        <svg viewBox="0 0 1180 400" class="draw" role="img" aria-label="Mounting KeeperHub directly puts 44 tool definitions in every prompt. With Bursar, six actions are in the prompt and the 44 tools sit behind it, reached from code.">
+          <defs>
+            <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 1.5 L9 5 L0 8.5" fill="none" stroke="#ef6a52" stroke-width="1.5"/>
+            </marker>
+          </defs>
+
+          <!-- left: everything mounted -->
+          <g fill="none" stroke="rgba(226,236,252,.32)" stroke-width="1">
+            <rect x="40" y="70" width="410" height="160"/>
+          </g>
+          <g fill="none" stroke="rgba(226,236,252,.45)" stroke-width="1">
+            <rect x="70" y="96" width="22" height="22"/>
+            <rect x="100" y="96" width="22" height="22"/>
+            <rect x="130" y="96" width="22" height="22"/>
+            <rect x="160" y="96" width="22" height="22"/>
+            <rect x="190" y="96" width="22" height="22"/>
+            <rect x="220" y="96" width="22" height="22"/>
+            <rect x="250" y="96" width="22" height="22"/>
+            <rect x="280" y="96" width="22" height="22"/>
+            <rect x="310" y="96" width="22" height="22"/>
+            <rect x="340" y="96" width="22" height="22"/>
+            <rect x="370" y="96" width="22" height="22"/>
+            <rect x="70" y="126" width="22" height="22"/>
+            <rect x="100" y="126" width="22" height="22"/>
+            <rect x="130" y="126" width="22" height="22"/>
+            <rect x="160" y="126" width="22" height="22"/>
+            <rect x="190" y="126" width="22" height="22"/>
+            <rect x="220" y="126" width="22" height="22"/>
+            <rect x="250" y="126" width="22" height="22"/>
+            <rect x="280" y="126" width="22" height="22"/>
+            <rect x="310" y="126" width="22" height="22"/>
+            <rect x="340" y="126" width="22" height="22"/>
+            <rect x="370" y="126" width="22" height="22"/>
+            <rect x="70" y="156" width="22" height="22"/>
+            <rect x="100" y="156" width="22" height="22"/>
+            <rect x="130" y="156" width="22" height="22"/>
+            <rect x="160" y="156" width="22" height="22"/>
+            <rect x="190" y="156" width="22" height="22"/>
+            <rect x="220" y="156" width="22" height="22"/>
+            <rect x="250" y="156" width="22" height="22"/>
+            <rect x="280" y="156" width="22" height="22"/>
+            <rect x="310" y="156" width="22" height="22"/>
+            <rect x="340" y="156" width="22" height="22"/>
+            <rect x="370" y="156" width="22" height="22"/>
+            <rect x="70" y="186" width="22" height="22"/>
+            <rect x="100" y="186" width="22" height="22"/>
+            <rect x="130" y="186" width="22" height="22"/>
+            <rect x="160" y="186" width="22" height="22"/>
+            <rect x="190" y="186" width="22" height="22"/>
+            <rect x="220" y="186" width="22" height="22"/>
+            <rect x="250" y="186" width="22" height="22"/>
+            <rect x="280" y="186" width="22" height="22"/>
+            <rect x="310" y="186" width="22" height="22"/>
+            <rect x="340" y="186" width="22" height="22"/>
+            <rect x="370" y="186" width="22" height="22"/>
+          </g>
+
+          <!-- right: six in the prompt, the same forty-four behind it -->
+          <g fill="none" stroke="rgba(226,236,252,.32)" stroke-width="1">
+            <rect x="700" y="70" width="410" height="160"/>
+            <rect x="700" y="256" width="410" height="112" stroke-dasharray="5 5"/>
+          </g>
+          <g fill="none" stroke="#ef6a52" stroke-width="1.3">
+            <rect x="730" y="128" width="22" height="22"/>
+            <rect x="760" y="128" width="22" height="22"/>
+            <rect x="790" y="128" width="22" height="22"/>
+            <rect x="820" y="128" width="22" height="22"/>
+            <rect x="850" y="128" width="22" height="22"/>
+            <rect x="880" y="128" width="22" height="22"/>
+          </g>
+          <g fill="none" stroke="rgba(226,236,252,.2)" stroke-width="1">
+            <rect x="730" y="282" width="14" height="14"/>
+            <rect x="749" y="282" width="14" height="14"/>
+            <rect x="768" y="282" width="14" height="14"/>
+            <rect x="787" y="282" width="14" height="14"/>
+            <rect x="806" y="282" width="14" height="14"/>
+            <rect x="825" y="282" width="14" height="14"/>
+            <rect x="844" y="282" width="14" height="14"/>
+            <rect x="863" y="282" width="14" height="14"/>
+            <rect x="882" y="282" width="14" height="14"/>
+            <rect x="901" y="282" width="14" height="14"/>
+            <rect x="920" y="282" width="14" height="14"/>
+            <rect x="730" y="301" width="14" height="14"/>
+            <rect x="749" y="301" width="14" height="14"/>
+            <rect x="768" y="301" width="14" height="14"/>
+            <rect x="787" y="301" width="14" height="14"/>
+            <rect x="806" y="301" width="14" height="14"/>
+            <rect x="825" y="301" width="14" height="14"/>
+            <rect x="844" y="301" width="14" height="14"/>
+            <rect x="863" y="301" width="14" height="14"/>
+            <rect x="882" y="301" width="14" height="14"/>
+            <rect x="901" y="301" width="14" height="14"/>
+            <rect x="920" y="301" width="14" height="14"/>
+            <rect x="730" y="320" width="14" height="14"/>
+            <rect x="749" y="320" width="14" height="14"/>
+            <rect x="768" y="320" width="14" height="14"/>
+            <rect x="787" y="320" width="14" height="14"/>
+            <rect x="806" y="320" width="14" height="14"/>
+            <rect x="825" y="320" width="14" height="14"/>
+            <rect x="844" y="320" width="14" height="14"/>
+            <rect x="863" y="320" width="14" height="14"/>
+            <rect x="882" y="320" width="14" height="14"/>
+            <rect x="901" y="320" width="14" height="14"/>
+            <rect x="920" y="320" width="14" height="14"/>
+            <rect x="730" y="339" width="14" height="14"/>
+            <rect x="749" y="339" width="14" height="14"/>
+            <rect x="768" y="339" width="14" height="14"/>
+            <rect x="787" y="339" width="14" height="14"/>
+            <rect x="806" y="339" width="14" height="14"/>
+            <rect x="825" y="339" width="14" height="14"/>
+            <rect x="844" y="339" width="14" height="14"/>
+            <rect x="863" y="339" width="14" height="14"/>
+            <rect x="882" y="339" width="14" height="14"/>
+            <rect x="901" y="339" width="14" height="14"/>
+            <rect x="920" y="339" width="14" height="14"/>
+          </g>
+
+          <!-- the call that keeps the traffic out of the prompt -->
+          <g fill="none" stroke="#ef6a52" stroke-width="1.4" stroke-dasharray="6 10" class="flow" marker-end="url(#arrow2)">
+            <path d="M905 176 L905 252"/>
+          </g>
+
+          <g font-family="Barlow Semi Condensed, sans-serif" letter-spacing="1.6" fill="#e8effb">
+            <text x="40" y="58" font-size="13">MOUNTED DIRECTLY</text>
+            <text x="700" y="58" font-size="13">WITH BURSAR</text>
+
+            <text x="40" y="254" font-size="11.5" fill="#a9bce0">44 TOOL DEFINITIONS</text>
+            <text x="40" y="274" font-size="11.5" fill="#ef6a52">13,300 TOKENS IN EVERY PROMPT</text>
+
+            <text x="700" y="254" font-size="11.5" fill="#a9bce0">6 TREASURY ACTIONS</text>
+            <text x="1110" y="254" font-size="11.5" fill="#ef6a52" text-anchor="end">950 TOKENS</text>
+
+            <text x="700" y="386" font-size="11.5" fill="#a9bce0">THE SAME 44, REACHED FROM CODE · NONE OF THEM IN THE PROMPT</text>
+          </g>
+
+          <!-- dimension line comparing the two -->
+          <g fill="none" stroke="rgba(226,236,252,.3)" stroke-width="1">
+            <line x1="40" y1="310" x2="1110" y2="310"/>
+            <line x1="40" y1="303" x2="40" y2="317"/>
+            <line x1="1110" y1="303" x2="1110" y2="317"/>
+          </g>
+          <text x="575" y="304" text-anchor="middle" font-family="Barlow Semi Condensed, sans-serif" font-size="12" letter-spacing="1.8" fill="#ef6a52">14 : 1 RESIDENT · 330 : 1 PER SCHEMA LOOKUP</text>
+
+          <text x="40" y="386" font-family="Barlow Semi Condensed, sans-serif" font-size="11" letter-spacing="1.4" fill="#a9bce0">44 EXECUTION TOOLS HAVE TO BE ASKED NOT TO SPEND · A PAYOUT ACTION CANNOT</text>
+        </svg>
+        <figcaption>
+          <span>Fig. 2 — Surface area</span>
+          <span>Measured, npm run context-cost</span>
+        </figcaption>
+      </figure>
+
       <div class="scroller">
         <table class="data">
           <thead>
@@ -662,10 +854,22 @@
       return;
     }
 
+    function run(el) {
+      if (el.classList.contains("draw")) {
+        el.querySelectorAll("path, line, rect, circle, polyline").forEach(function (p) {
+          p.style.animationPlayState = "running";
+        });
+      } else {
+        el.classList.add("seen");
+      }
+    }
+
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (e) {
         if (!e.isIntersecting) return;
         var el = e.target;
+        var delay = Number(el.dataset.stagger || 0);
+        if (delay) { setTimeout(function () { run(el); }, delay); io.unobserve(el); return; }
         if (el.classList.contains("draw")) {
           el.querySelectorAll("path, line, rect, circle, polyline").forEach(function (p) {
             p.style.animationPlayState = "running";
@@ -677,15 +881,10 @@
       });
     }, { threshold: 0, rootMargin: "0px 0px -4% 0px" });
 
-    function run(el) {
-      if (el.classList.contains("draw")) {
-        el.querySelectorAll("path, line, rect, circle, polyline").forEach(function (p) {
-          p.style.animationPlayState = "running";
-        });
-      } else {
-        el.classList.add("seen");
-      }
-    }
+    // The schedule is a list that reads top to bottom, so it arrives that way.
+    document.querySelectorAll(".schedule .fade").forEach(function (el, i) {
+      el.dataset.stagger = String(Math.min(i * 70, 420));
+    });
 
     document.querySelectorAll(".draw, .fade").forEach(function (el) {
       // A tall drawing can be on screen at load without ever crossing a
