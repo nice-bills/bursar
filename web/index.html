@@ -351,19 +351,21 @@
     perpetual animation on the page and it earns its place by saying the thing
     the product claims — that value moves, continuously, through the gate.
   */
-  .flow { animation: march 1.5s linear infinite; }
+  .flow > * { animation: march 1.5s linear infinite; }
   @keyframes march { to { stroke-dashoffset: -28; } }
 
   @media (prefers-reduced-motion: reduce) {
     .flow { animation: none; }
   }
 
-  .fade { opacity: 0; transform: translateY(10px); transition: opacity .6s ease, transform .6s cubic-bezier(.2,.7,.3,1); }
-  .fade.seen { opacity: 1; transform: none; }
+  .fade { transition: opacity .6s ease, transform .6s cubic-bezier(.2,.7,.3,1); }
+  .fade.armed { opacity: 0; transform: translateY(10px); }
+  .fade.armed.seen { opacity: 1; transform: none; }
 
   @media (prefers-reduced-motion: reduce) {
     html { scroll-behavior: auto; }
-    .fade { opacity: 1; transform: none; transition: none; }
+    .fade, .fade.armed { opacity: 1; transform: none; transition: none; }
+    .flow > * { animation: none; }
   }
 </style>
 
@@ -864,6 +866,11 @@
       }
     }
 
+    // Arm the reveal only once we know we will drive it.
+    if (!reduced && "IntersectionObserver" in window) {
+      document.querySelectorAll(".fade").forEach(function (el) { el.classList.add("armed"); });
+    }
+
     var io = new IntersectionObserver(function (entries) {
       entries.forEach(function (e) {
         if (!e.isIntersecting) return;
@@ -894,5 +901,15 @@
       if (r.top < window.innerHeight && r.bottom > 0) run(el);
       else io.observe(el);
     });
+
+    // If the observer never delivers — a throttled tab, a browser that pauses
+    // it — reveal whatever is on screen anyway. Motion is the enhancement;
+    // the content is not optional.
+    setInterval(function () {
+      document.querySelectorAll(".fade.armed:not(.seen)").forEach(function (el) {
+        var r = el.getBoundingClientRect();
+        if (r.top < window.innerHeight && r.bottom > 0) run(el);
+      });
+    }, 1200);
   })();
 </script>

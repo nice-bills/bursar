@@ -18,6 +18,7 @@ import { KeeperHubClient } from "../keeperhub/client.js";
 import { KeeperHubMcp } from "../keeperhub/mcp.js";
 import { Ledger, dailyPeriod, type LedgerEntry } from "../ledger/store.js";
 import { PolicyEngine } from "../policy/engine.js";
+import { Valuation } from "../treasury/valuation.js";
 import { Executor, type MoveOutcome } from "../treasury/executor.js";
 import { formatUnits, NATIVE_DECIMALS } from "../units.js";
 import {
@@ -128,7 +129,16 @@ export class BursarService extends Service {
     this.executor = new Executor(
       this.client,
       this.ledger,
-      new PolicyEngine(this.treasuryCfg, this.ledger, () => this.mcp.getSpendingLimits()),
+      new PolicyEngine(
+        this.treasuryCfg,
+        this.ledger,
+        () => this.mcp.getSpendingLimits(),
+        new Valuation(
+          this.client,
+          60_000,
+          this.treasuryCfg.policy.maxPriceAgeSeconds,
+        ),
+      ),
       this.treasuryCfg,
     );
   }

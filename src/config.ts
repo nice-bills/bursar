@@ -80,6 +80,13 @@ const assetPolicySchema = z.object({
   decimals: z.number().int().min(0).max(36),
   maxPerTransfer: baseUnits,
   maxPerDay: baseUnits,
+  /**
+   * Chainlink aggregator for this asset, read through KeeperHub. Required for
+   * any asset that may move while a cross-asset ceiling is set — an asset that
+   * cannot be valued cannot be counted, and a ceiling that silently skips
+   * assets is not a ceiling.
+   */
+  priceFeed: address.optional(),
 });
 
 /**
@@ -126,6 +133,22 @@ const policySchema = z.object({
    * than refusing.
    */
   assets: z.record(address, assetPolicySchema).default({}),
+
+  /**
+   * A ceiling on total value leaving in a rolling 24h, in whole US cents,
+   * across every asset at once. Per-asset caps bound each token; this bounds
+   * the treasury.
+   */
+  maxPerDayUsd: z
+    .string()
+    .regex(/^\d+$/, "must be whole US cents as an integer string")
+    .optional(),
+
+  /** Chainlink aggregator for the native asset, needed when the ceiling is set. */
+  nativePriceFeed: address.optional(),
+
+  /** How stale a published price may be before a movement is refused. */
+  maxPriceAgeSeconds: z.number().int().positive().default(3600),
 });
 
 export const configSchema = z
@@ -186,6 +209,27 @@ export const configSchema = z
         path: ["policy"],
         message: "maxPerTransfer exceeds maxPerDay, so the daily cap can never bind",
       });
+    }
+
+    if (cfg.policy.maxPerDayUsd !== undefined) {
+      if (!cfg.policy.nativePriceFeed) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["policy", "nativePriceFeed"],
+          message:
+            "maxPerDayUsd needs nativePriceFeed, or native movements cannot be valued and the " +
+            "ceiling would only bind some of the treasury",
+        });
+      }
+      for (const [token, asset] of Object.entries(cfg.policy.assets)) {
+        if (!asset.priceFeed) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["policy", "assets", token],
+            message: `${asset.symbol}: needs a priceFeed while maxPerDayUsd is set`,
+          });
+        }
+      }
     }
 
     for (const [token, asset] of Object.entries(cfg.policy.assets)) {

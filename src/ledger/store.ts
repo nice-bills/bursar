@@ -36,6 +36,12 @@ export interface LedgerEntry {
   decimals: number;
   /** Explorer URLs for the confirmed transactions. */
   transactionLinks?: string[];
+  /**
+   * What the movement was worth in whole US cents when it was approved, so the
+   * cross-asset ceiling can be summed without re-pricing history at today's
+   * rates. A limit that moves with the market is not a limit.
+   */
+  valueUsdCents?: string;
   /** Free-text: contributor name, "gas top-up", etc. */
   memo: string;
   executionId?: string;
@@ -229,6 +235,25 @@ export class Ledger {
           : entry.token?.toLowerCase() === token.toLowerCase();
       if (!sameToken) continue;
       total += BigInt(entry.amount);
+    }
+    return total;
+  }
+
+  /**
+   * Total value moved in the trailing window, in US cents, across every asset.
+   *
+   * Uses the valuation recorded at approval time. Re-pricing history would mean
+   * a movement that was inside the ceiling yesterday could push today's total
+   * over it purely because the market moved.
+   */
+  async valueMovedSince(since: Date): Promise<bigint> {
+    const latest = await this.latestByIntent();
+    let total = 0n;
+    for (const entry of latest.values()) {
+      if (entry.status === "failed" || entry.status === "abandoned") continue;
+      if (new Date(entry.at) < since) continue;
+      if (!entry.valueUsdCents) continue;
+      total += BigInt(entry.valueUsdCents);
     }
     return total;
   }

@@ -11,6 +11,7 @@
 
 import { assetPolicyFor, type BursarConfig } from "../config.js";
 import type { Leg, Ledger } from "../ledger/store.js";
+import { formatUsd, ValuationError, type Valuation } from "../treasury/valuation.js";
 import type { SpendingLimits } from "../keeperhub/mcp.js";
 
 /**
@@ -31,6 +32,8 @@ export type Decision =
   | { verdict: "deny"; reason: string };
 
 export interface Movement {
+  /** Set by the policy engine once valued, so the caller can record it. */
+  valueUsdCents?: string;
   leg: Leg;
   chainId: number;
   to: string;
@@ -53,6 +56,8 @@ export class PolicyEngine {
      * must work offline and in tests.
      */
     private readonly platformLimits?: PlatformLimitsReader,
+    /** Values movements against a price feed. Required only when a USD ceiling is set. */
+    private readonly valuation?: Valuation,
   ) {}
 
   /**
@@ -194,7 +199,66 @@ export class PolicyEngine {
       }
     }
 
-    // 6. Unreconciled history. If a previous movement is still open we do not
+    // 6. The ceiling across every asset at once.
+    //
+    //    Per-asset caps bound each token; nothing bounds the treasury. Six
+    //    assets, each generously capped, add up to no ceiling at all.
+    //
+    //    Valuing a movement needs a price, and a treasury that phones an
+    //    arbitrary price API to decide whether it may spend has taken on a
+    //    dependency nobody audited. So the price is read the way the money
+    //    moves: a Chainlink aggregator, called through KeeperHub, landing in
+    //    the same execution history as every transfer.
+    //
+    //    Last of the limits, because it costs a price read and there is no
+    //    sense paying for one to reject what the cheap checks already would.
+    const ceiling = this.config.policy.maxPerDayUsd;
+    if (ceiling !== undefined) {
+      const feed =
+        movement.token === null
+          ? this.config.policy.nativePriceFeed
+          : assetPolicyFor(this.config.policy, movement.token)?.priceFeed;
+
+      if (!this.valuation || !feed) {
+        return {
+          verdict: "deny",
+          reason:
+            `a daily value ceiling is set but ${movement.token ?? "the native asset"} has no ` +
+            `price feed available, so this movement cannot be counted against it`,
+        };
+      }
+
+      try {
+        const valueCents = await this.valuation.valueInCents(
+          amount,
+          movement.decimals,
+          movement.chainId,
+          feed,
+        );
+        const spentCents = await this.ledger.valueMovedSince(since);
+        const capCents = BigInt(ceiling);
+
+        if (spentCents + valueCents > capCents) {
+          return {
+            verdict: "deny",
+            reason:
+              `would move ${formatUsd(spentCents + valueCents)} of value in 24h, over the ` +
+              `${formatUsd(capCents)} ceiling (${formatUsd(spentCents)} already moved)`,
+          };
+        }
+
+        // Handed back so it is written down with the movement rather than
+        // recomputed later at a price the market has moved since.
+        movement.valueUsdCents = valueCents.toString();
+      } catch (error) {
+        // Fail closed. A ceiling that cannot be evaluated is not a ceiling, and
+        // "the price feed was stale" is not a reason to let money out.
+        const why = error instanceof ValuationError ? error.message : String(error);
+        return { verdict: "deny", reason: `could not value this movement: ${why}` };
+      }
+    }
+
+    // 7. Unreconciled history. If a previous movement is still open we do not
     //    know the true balance, so committing more money is guesswork.
     const open = await this.ledger.openIntents();
     const blocking = open.filter((e) => e.chainId === movement.chainId);
@@ -207,7 +271,7 @@ export class PolicyEngine {
       };
     }
 
-    // 7. Human escalation threshold — last, so the reason returned is the most
+    // 8. Human escalation threshold — last, so the reason returned is the most
     //    actionable one rather than an approval prompt masking a hard failure.
     //    Only meaningful for the native asset it is denominated in.
     const threshold =

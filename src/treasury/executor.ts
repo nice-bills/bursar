@@ -120,6 +120,7 @@ export class Executor {
       amount: movement.amount,
       token: movement.token,
       decimals: movement.decimals,
+      valueUsdCents: movement.valueUsdCents,
       memo: movement.memo,
     };
     await this.ledger.append({ ...base, status: "intent" });
