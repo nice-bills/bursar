@@ -11,6 +11,7 @@ import {
   shouldDeploy,
   aaveWithdrawWorkflow,
   aaveReserveDataWorkflow,
+  aaveRateKeeperWorkflow,
 } from "../src/yield/aave.js";
 
 /**
@@ -190,6 +191,56 @@ describe("the workflows sent to KeeperHub", () => {
     assert.equal(node?.data.config.actionType, "aave-v3/withdraw");
     assert.equal(node?.data.config.amount, "1000000000000000000");
     assert.equal(node?.data.config.network, "11155111");
+  });
+
+  test("the rate keeper only withdraws on the true branch", () => {
+    // The edge that matters. Without the handle, a keeper withdraws on every
+    // run regardless of the rate — which is worse than having no keeper,
+    // because it drains the position precisely when the rate is fine.
+    const workflow = aaveRateKeeperWorkflow(
+      11155111,
+      "0xasset",
+      `0x${"1".repeat(40)}`,
+      "LINK",
+      10n ** 25n,
+      "10000000000000000",
+    );
+    const edge = workflow.edges.find((e) => e.target === "withdraw");
+    assert.equal(edge?.sourceHandle, "true");
+    assert.equal(edge?.source, "gate");
+  });
+
+  test("the keeper gates on the nested rate field and compares in ray", () => {
+    // Two things this pins: the read node nests under `result`, and the
+    // comparison stays in ray. Converting to a percentage first would round
+    // away the boundary the whole decision turns on.
+    const floor = 10n ** 25n; // 1%
+    const workflow = aaveRateKeeperWorkflow(
+      11155111,
+      "0xasset",
+      `0x${"1".repeat(40)}`,
+      "LINK",
+      floor,
+      "1",
+    );
+    const condition = String(workflow.nodes.find((n) => n.id === "gate")?.data.config.condition);
+    assert.match(condition, /result\.liquidityRate/);
+    assert.ok(condition.includes(floor.toString()), "the floor must be compared in ray");
+  });
+
+  test("the keeper runs on KeeperHub's schedule, not the agent's", () => {
+    // The point of the keeper is that it reacts while the agent is down, and a
+    // rate collapse does not wait for the agent to come back up.
+    const workflow = aaveRateKeeperWorkflow(
+      11155111,
+      "0xasset",
+      `0x${"1".repeat(40)}`,
+      "LINK",
+      10n ** 25n,
+      "1",
+    );
+    const trigger = workflow.nodes.find((n) => n.type === "trigger");
+    assert.equal(trigger?.data.config.triggerType, "Schedule");
   });
 
   test("position reads for different holders get different workflow names", () => {

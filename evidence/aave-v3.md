@@ -70,6 +70,36 @@ Withdrawal receipt:
 Workflow on KeeperHub:
 [`43f0vyjzczzi32xwa9860`](https://app.keeperhub.com/workflows/43f0vyjzczzi32xwa9860)
 
+## Aave triggers the movement, not us
+
+Everything above runs because Bursar decided to look. The rate keeper runs
+because KeeperHub's scheduler fired, reads Aave's supply rate, and pulls the
+position out if the protocol has stopped paying enough to justify leaving
+capital there. The agent can be down and the treasury still reacts — which is
+the only condition under which reacting matters, because a rate collapse does
+not wait for the agent to come back up.
+
+Both branches were exercised against the live rate:
+
+| Floor | Aave's live rate | Gate | Result |
+| --- | --- | --- | --- |
+| 1.00% | 234.37% | `{"condition":false}` | nothing moved |
+| 300.00% | 234.37% | fired | withdrew 0.01 LINK |
+
+The withdrawal the keeper made on its own:
+[`0x10f52eadf477d85a439a9a7b3ce75c8aa55cec42aaad6a0b113236d8a236ee20`](https://sepolia.etherscan.io/tx/0x10f52eadf477d85a439a9a7b3ce75c8aa55cec42aaad6a0b113236d8a236ee20)
+
+The position moved 5.000445 → 4.990494 LINK, confirming it settled.
+
+The floor was returned to 1.00% afterwards. The keeper is on an hourly
+schedule, so leaving it above the live rate would have withdrawn 0.01 LINK
+every hour.
+
+Only the `true` branch reaches the withdraw node. A keeper wired without that
+handle withdraws on every run regardless of the rate, which is worse than
+having no keeper — it drains the position precisely when the rate is fine.
+That edge is pinned in the tests.
+
 ## Two details that broke the parsers first
 
 Recorded because they are the kind of thing a wrapper gets wrong and only

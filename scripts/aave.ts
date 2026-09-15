@@ -21,6 +21,7 @@ import {
   aaveAccountDataWorkflow,
   aaveReserveDataWorkflow,
   aaveWithdrawWorkflow,
+  aaveRateKeeperWorkflow,
   readAccountData,
   readReserveData,
   accruedInterest,
@@ -33,6 +34,18 @@ import type { WorkflowDefinition } from "../src/treasury/workflows.js";
 
 const withdrawIndex = process.argv.indexOf("--withdraw");
 const WITHDRAW = withdrawIndex >= 0 ? process.argv[withdrawIndex + 1] : null;
+
+/**
+ * Author the rate keeper and run it once.
+ *
+ * `--keeper <floorBps> <amountBaseUnits>` — the floor is what makes this
+ * demonstrable in both directions: set it under Aave's current rate and the
+ * gate must hold, set it over and the keeper must pull the position out.
+ */
+const keeperIndex = process.argv.indexOf("--keeper");
+const KEEPER = keeperIndex >= 0
+  ? { floorBps: process.argv[keeperIndex + 1], amount: process.argv[keeperIndex + 2] }
+  : null;
 
 /** Floor below which supplying is not worth the gas. 0.50% APY. */
 const MIN_APY_BPS = 50n;
@@ -157,6 +170,39 @@ async function main(): Promise<void> {
     console.log(
       `\n  deploy surplus? ${decision.deploy ? "yes" : "no"} — ${decision.reason}`,
     );
+  }
+
+  // --- the leg Aave drives on its own ---------------------------------------
+  if (KEEPER) {
+    const { floorBps, amount } = KEEPER;
+    if (!floorBps || !/^\d+$/.test(floorBps) || !amount || !/^\d+$/.test(amount)) {
+      throw new Error("--keeper wants <floorBps> <amountBaseUnits>, both as digits");
+    }
+    // Basis points back to ray, the scale Aave reports rates in.
+    const floorRay = BigInt(floorBps) * 10n ** 23n;
+
+    const workflow = aaveRateKeeperWorkflow(
+      chainId,
+      asset,
+      user,
+      symbol,
+      floorRay,
+      amount,
+    );
+    console.log(`\nAuthoring the rate keeper — floor ${formatApy(floorRay)}...`);
+    const output = await runWorkflow(client, workflow, known);
+
+    // Whether the gate held is the whole result. A keeper that withdrew when
+    // the rate was fine would be worse than no keeper.
+    const text = JSON.stringify(output) ?? "";
+    const hash = text.match(/"transactionHash":"(0x[0-9a-fA-F]{64})"/)?.[1];
+    if (hash) {
+      console.log(`  the rate was below the floor — the keeper withdrew, with no agent involved`);
+      console.log(`  tx: https://sepolia.etherscan.io/tx/${hash}`);
+    } else {
+      console.log(`  the rate cleared the floor — the gate held and nothing moved`);
+      console.log(`  output: ${text.slice(0, 260)}`);
+    }
   }
 
   // --- the return leg -------------------------------------------------------

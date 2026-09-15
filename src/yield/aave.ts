@@ -325,6 +325,112 @@ export function aaveReserveDataWorkflow(
 }
 
 /**
+ * A keeper that watches Aave and acts without us.
+ *
+ * Everything else in this file runs because Bursar decided to look. This runs
+ * because KeeperHub's scheduler fired, reads Aave's own supply rate, and pulls
+ * the position out if the protocol has stopped paying enough to justify leaving
+ * capital there.
+ *
+ * That is the difference between consulting a protocol and being wired to one.
+ * The agent can be down, the process can be dead, and the treasury still
+ * reacts to Aave — which is the only condition under which reacting matters,
+ * because a rate collapse does not wait for the agent to come back up.
+ *
+ * The withdrawal amount is fixed when the workflow is authored rather than read
+ * from the position, for the same reason the gas keeper's top-up is: an amount
+ * derived from the number it is about to change lets a run chase its own
+ * effect.
+ */
+export function aaveRateKeeperWorkflow(
+  chainId: number,
+  asset: string,
+  user: string,
+  symbol: string,
+  minRateRay: bigint,
+  withdrawBaseUnits: string,
+  cron = "0 * * * *",
+): WorkflowDefinition {
+  // The read node nests its fields under `result`, so the gate has to reach
+  // through it. Confirmed by execution.
+  const rateRef = "{{@reserve-data:Aave Reserve Data.result.liquidityRate}}";
+
+  return {
+    name: `Bursar Aave Rate Keeper ${symbol} — chain ${chainId}`,
+    description:
+      `Watch Aave v3's ${symbol} supply rate on chain ${chainId}. If it falls below ` +
+      `${formatApy(minRateRay)}, withdraw ${withdrawBaseUnits} base units back to ${user}. ` +
+      `Runs on KeeperHub's schedule, so it reacts while the agent is down. ` +
+      `Authored by plugin-bursar.`,
+    nodes: [
+      {
+        id: "trigger-1",
+        type: "trigger",
+        data: {
+          type: "trigger",
+          label: "Hourly",
+          config: { triggerType: "Schedule", scheduleCron: cron, scheduleTimezone: "UTC" },
+          status: "idle",
+        },
+        position: { x: 0, y: 116 },
+      },
+      {
+        id: "reserve-data",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Aave Reserve Data",
+          config: {
+            actionType: "aave-v3/get-user-reserve-data",
+            network: String(chainId),
+            asset,
+            user,
+          },
+          status: "idle",
+        },
+        position: { x: 252, y: 116 },
+      },
+      {
+        id: "gate",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Rate Below Floor?",
+          // Compared in ray, as integers. Converting to a percentage first
+          // would round the comparison at exactly the boundary that decides it.
+          config: { actionType: "Condition", condition: `${rateRef} < ${minRateRay}` },
+          status: "idle",
+        },
+        position: { x: 504, y: 116 },
+      },
+      {
+        id: "withdraw",
+        type: "action",
+        data: {
+          type: "action",
+          label: "Withdraw from Aave",
+          config: {
+            actionType: "aave-v3/withdraw",
+            network: String(chainId),
+            asset,
+            amount: withdrawBaseUnits,
+            to: user,
+          },
+          status: "idle",
+        },
+        position: { x: 756, y: 116 },
+      },
+    ],
+    edges: [
+      { id: "e1", source: "trigger-1", target: "reserve-data" },
+      { id: "e2", source: "reserve-data", target: "gate" },
+      // Only the true branch withdraws. A rate that is fine must do nothing.
+      { id: "e3", source: "gate", target: "withdraw", sourceHandle: "true" },
+    ],
+  };
+}
+
+/**
  * Pull supplied funds back out of Aave.
  *
  * The leg that makes this a treasury rather than a one-way door. When the
