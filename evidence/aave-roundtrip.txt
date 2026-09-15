@@ -1,0 +1,43 @@
+
+> plugin-bursar@0.1.0 aave
+> tsx scripts/aave.ts --withdraw 65000000000000000
+
+Aave v3 on chain 11155111
+  pool : 0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951
+  user : 0x8d9abc5b07917229159886be02e5eed1dc7fbdc9
+  asset: LINK 0xf8Fb3713D459D7C1018BD0A49D19b4C44290EBE5
+
+Reading account health from Aave...
+  collateral     : $151.96
+  debt           : $0.00
+  borrowing power: $106.37
+  health factor  : no debt
+  LTV            : 70%
+
+Reading the LINK position from Aave...
+  supplied  : 5.065431864488097885 LINK (aToken)
+  debt      : 0 LINK
+  supply APY: 234.37% (23437 bps)
+  collateral: enabled
+
+  supplied by Bursar: 5 LINK
+  accrued interest  : 0.065431864488097885 LINK
+
+  deploy surplus? yes — Aave is paying 234.37%
+
+Withdrawing 0.065 LINK from Aave...
+  success : yes
+  reverted: false
+  tx      : https://sepolia.etherscan.io/tx/0xd96c8ee7187ddf833f6acb13f32e23fd92d09c6c5469a9e5c12c9b13590656fb
+
+=== position after the withdrawal ===
+Reading the LINK position from Aave...
+  supplied  : 5.000445359287327522 LINK (aToken)
+  debt      : 0 LINK
+  supply APY: 234.37% (23437 bps)
+  collateral: enabled
+
+  supplied by Bursar: 5 LINK
+  accrued interest  : 0.000445359287327522 LINK
+
+  deploy surplus? yes — Aave is paying 234.37%

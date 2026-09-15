@@ -170,7 +170,19 @@ async function main(): Promise<void> {
       aaveWithdrawWorkflow(chainId, asset, WITHDRAW, user, symbol),
       known,
     );
-    console.log(`  ${JSON.stringify(output)?.slice(0, 300)}`);
+    // The withdraw node reports its receipt in the output rather than in the
+    // execution's transactionHashes, so read it from there — a withdrawal
+    // without a verifiable hash is a claim, not proof.
+    const o = (output ?? {}) as Record<string, unknown>;
+    const call = (o.executedCall ?? {}) as Record<string, unknown>;
+    const hash =
+      (typeof o.transactionHash === "string" && o.transactionHash) ||
+      (typeof call.transactionHash === "string" && call.transactionHash) ||
+      null;
+    console.log(`  success : ${o.success === true ? "yes" : String(o.success)}`);
+    console.log(`  reverted: ${String(call.reverted)}`);
+    if (hash) console.log(`  tx      : https://sepolia.etherscan.io/tx/${hash}`);
+    else console.log(`  raw     : ${JSON.stringify(output)?.slice(0, 400)}`);
   }
 }
 
