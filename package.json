@@ -15,10 +15,12 @@
     "test": "node --import tsx --test test/*.test.ts",
     "demo": "tsx scripts/demo.ts",
     "workflow": "tsx scripts/workflow.ts",
+    "listing": "tsx scripts/listing.ts",
     "chaos": "tsx scripts/chaos.ts",
     "agent": "tsx scripts/agent.ts",
     "context-cost": "tsx scripts/context-cost.ts",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "aave": "tsx scripts/aave.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

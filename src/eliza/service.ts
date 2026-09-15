@@ -31,6 +31,12 @@ import {
   ERC20_APPROVE_ABI,
 } from "../treasury/workflows.js";
 import { assetPolicyFor } from "../config.js";
+import {
+  aaveReserveDataWorkflow,
+  readReserveData,
+  shouldDeploy,
+  type AaveReserveData,
+} from "../yield/aave.js";
 
 /** Settings arrive loosely typed; every value we read is a string or absent. */
 function setting(runtime: IAgentRuntime, key: string): string | undefined {
@@ -55,6 +61,14 @@ export interface YieldReport {
   /** Base units held, or null when the read failed. */
   balance: string | null;
   supplied: string | null;
+  /**
+   * Aave's live supply rate at the moment of the decision, in basis points.
+   * Null when the protocol could not be read — which is itself a reason not to
+   * have supplied.
+   */
+  apyBps: string | null;
+  /** Supplied balance including accrued interest, as Aave reports it. */
+  suppliedBalance: string | null;
   note: string;
 }
 
@@ -422,7 +436,15 @@ export class BursarService extends Service {
 
     const holder = this.treasuryCfg.treasury.address;
     if (!holder) {
-      return { symbol: "-", asset: "", balance: null, supplied: null, note: "no treasury address" };
+      return {
+        symbol: "-",
+        asset: "",
+        balance: null,
+        supplied: null,
+        apyBps: null,
+        suppliedBalance: null,
+        note: "no treasury address",
+      };
     }
 
     const assetPolicy = assetPolicyFor(this.treasuryCfg.policy, cfg.asset);
@@ -432,6 +454,8 @@ export class BursarService extends Service {
         asset: cfg.asset,
         balance: null,
         supplied: null,
+        apyBps: null,
+        suppliedBalance: null,
         note: `no policy.assets entry for ${cfg.asset}; refusing to supply it`,
       };
     }
@@ -443,6 +467,8 @@ export class BursarService extends Service {
         asset: cfg.asset,
         balance: null,
         supplied: null,
+        apyBps: null,
+        suppliedBalance: null,
         note: "balance could not be read",
       };
     }
@@ -455,7 +481,29 @@ export class BursarService extends Service {
         asset: cfg.asset,
         balance: balance.toString(),
         supplied: null,
+        apyBps: null,
+        suppliedBalance: null,
         note: `no surplus above the ${formatUnits(buffer, assetPolicy.decimals)} buffer`,
+      };
+    }
+
+    // Ask Aave what it is actually paying before spending gas to supply.
+    //
+    // This is the gate that makes the integration two-way: the protocol's own
+    // live rate decides whether the movement happens at all. Reading fails
+    // closed — not knowing what Aave pays is not the same as Aave paying
+    // enough, and the difference is a transaction fee spent on nothing.
+    const reserve = await this.readAaveReserve(cfg.chainId, cfg.asset, holder, assetPolicy.symbol);
+    const decision = shouldDeploy(reserve, BigInt(cfg.minApyBps));
+    if (!decision.deploy) {
+      return {
+        symbol: assetPolicy.symbol,
+        asset: cfg.asset,
+        balance: balance.toString(),
+        supplied: null,
+        apyBps: reserve ? decision.apyBps.toString() : null,
+        suppliedBalance: reserve?.currentATokenBalance.toString() ?? null,
+        note: `not supplying — ${decision.reason}`,
       };
     }
 
@@ -507,6 +555,8 @@ export class BursarService extends Service {
       asset: cfg.asset,
       balance: balance.toString(),
       supplied: outcome.result === "confirmed" ? amount.toString() : null,
+      apyBps: decision.apyBps.toString(),
+      suppliedBalance: reserve?.currentATokenBalance.toString() ?? null,
       note:
         outcome.result === "confirmed"
           ? `supplied ${formatUnits(amount, assetPolicy.decimals)} ${assetPolicy.symbol} — ` +
@@ -519,6 +569,29 @@ export class BursarService extends Service {
                 ? "already supplied this period"
                 : `failed: ${outcome.error}`,
     };
+  }
+
+  /**
+   * Read this asset's Aave position and live rate, straight from the protocol.
+   *
+   * Returns null rather than throwing: a treasury that cannot read Aave should
+   * decline to supply, not fall over. The caller turns null into a refusal.
+   */
+  private async readAaveReserve(
+    chainId: number,
+    asset: string,
+    holder: string,
+    symbol: string,
+  ): Promise<AaveReserveData | null> {
+    try {
+      const workflow = aaveReserveDataWorkflow(chainId, asset, holder, symbol);
+      const id = await this.ensureWorkflow(workflow.name, workflow);
+      const run = await this.client.executeWorkflow(id, {}, `reserve-${id}-${Date.now()}`);
+      const final = await this.client.awaitExecution(run.executionId);
+      return readReserveData(final.output);
+    } catch {
+      return null;
+    }
   }
 
   /** The Aave v3 Pool, read from the protocol's own address provider. */

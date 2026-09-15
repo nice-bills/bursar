@@ -16,7 +16,16 @@ import { appendFile, mkdir, readFile, writeFile, unlink } from "node:fs/promises
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 
-export type Leg = "sweep" | "payout" | "float" | "yield";
+/**
+ * `earning` is the only leg that points inward.
+ *
+ * Everything else here is the treasury spending; an earning is the treasury
+ * being paid — an x402 call settling against a listed workflow. It shares the
+ * entry shape because it is the same kind of fact (an amount, an asset, a
+ * counterparty, a transaction) and because the split that follows has to be
+ * auditable against the income that justified it.
+ */
+export type Leg = "sweep" | "payout" | "float" | "yield" | "earning";
 
 export type EntryStatus =
   | "intent"
@@ -71,6 +80,17 @@ export interface LedgerEntry {
  * approved.
  */
 const NOT_SPENT = new Set<EntryStatus>(["failed", "abandoned", "awaiting_approval", "declined"]);
+
+/**
+ * Legs that bring value in rather than send it out.
+ *
+ * Every aggregate below exists to answer "how much have we spent", and they all
+ * work by summing entry amounts. An inbound leg summed alongside outbound ones
+ * would read as spending that never happened, quietly eating the daily cap and
+ * making the treasury refuse payouts it should have made. Income is counted, but
+ * it is counted separately.
+ */
+const INBOUND = new Set<Leg>(["earning"]);
 
 /** A crashed holder should not wedge the treasury forever. */
 const LOCK_STALE_MS = 10 * 60 * 1000;
@@ -263,6 +283,7 @@ export class Ledger {
     let total = 0n;
     for (const entry of latest.values()) {
       if (NOT_SPENT.has(entry.status)) continue;
+      if (INBOUND.has(entry.leg)) continue;
       if (new Date(entry.at) < since) continue;
       const sameToken =
         token === null
@@ -286,9 +307,36 @@ export class Ledger {
     let total = 0n;
     for (const entry of latest.values()) {
       if (NOT_SPENT.has(entry.status)) continue;
+      if (INBOUND.has(entry.leg)) continue;
       if (new Date(entry.at) < since) continue;
       if (!entry.valueUsdCents) continue;
       total += BigInt(entry.valueUsdCents);
+    }
+    return total;
+  }
+
+  /**
+   * Revenue received in the trailing window.
+   *
+   * The counterpart to `movedSince`, and the basis for a split: you cannot
+   * honestly distribute earnings without a number for what was earned. Only
+   * confirmed income counts — an expected payment is not money, and paying
+   * contributors out of revenue that has not settled is how a treasury
+   * discovers it was never solvent.
+   */
+  async earnedSince(since: Date, token: string | null = null): Promise<bigint> {
+    const latest = await this.latestByIntent();
+    let total = 0n;
+    for (const entry of latest.values()) {
+      if (!INBOUND.has(entry.leg)) continue;
+      if (entry.status !== "confirmed") continue;
+      if (new Date(entry.at) < since) continue;
+      const sameToken =
+        token === null
+          ? entry.token === null
+          : entry.token?.toLowerCase() === token.toLowerCase();
+      if (!sameToken) continue;
+      total += BigInt(entry.amount);
     }
     return total;
   }

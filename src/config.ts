@@ -65,6 +65,18 @@ const yieldSchema = z.object({
    * the last claim on the money, never the first.
    */
   buffer: baseUnits,
+  /**
+   * Only supply when Aave's own supply rate clears this, in basis points.
+   *
+   * Read from the protocol immediately before depositing, not configured as a
+   * belief about what Aave pays. Supplying into a collapsed rate spends real
+   * gas to earn nothing, and the rate is knowable beforehand — so we look, and
+   * decline if it does not clear.
+   *
+   * Defaults to 0, which supplies at any rate and preserves the behaviour of
+   * configs written before this existed.
+   */
+  minApyBps: z.number().int().nonnegative().default(0),
 });
 
 /**
