@@ -17,6 +17,8 @@ const P = {
   gateToYield: "M1230 780 H 1420 V 1160 H 1600",
   /* The leg that makes yield a round trip rather than a one-way door. */
   yieldToTreasury: "M1600 1230 H 1360 V 600 H 1010",
+  /* Buying: the treasury paying another agent's invoice. */
+  gateToAgent: "M1230 780 H 1420 V 1620 H 1600",
 };
 
 /* ----------------------------------------------------------------- pieces */
@@ -138,6 +140,7 @@ const Schematic: React.FC = () => {
       {flow(P.gateToKeeper, 310, 1)}
       {flow(P.gateToYield, 320, 1)}
       {flow(P.yieldToTreasury, 1760, 1)}
+      {flow(P.gateToAgent, 2180, 1)}
 
       <Node x={280} y={330} w={280} h={180} title="EARNINGS" sub="X402 · MPP" sub2="FEES" delay={10} />
       <Node x={800} y={400} w={420} h={200} title="TREASURY" sub="ORG SIGNER · TURNKEY" sub2="0X8D9ABC…FBDC9" delay={60} />
@@ -149,6 +152,7 @@ const Schematic: React.FC = () => {
       <Node x={1600} y={280} w={520} h={170} title="PAYOUT" sub="60 / 40 BY SHARE" delay={330} />
       <Node x={1600} y={700} w={520} h={170} title="GAS KEEPER" sub="RUNS WITHOUT THE AGENT" delay={345} />
       <Node x={1600} y={1080} w={520} h={170} title="AAVE V3" sub="LIVE PROTOCOL · READ AND WRITTEN" sub2="RATE GATES THE DEPOSIT" delay={360} />
+      <Node x={1600} y={1540} w={520} h={170} title="ANOTHER AGENT" sub="LUCID · X402 INVOICE" sub2="PAID UNDER POLICY" delay={2180} />
 
       <Node x={280} y={980} w={420} h={170} title="INTENT LEDGER" sub="WRITTEN BEFORE SENDING" delay={200} dashed />
 
@@ -161,6 +165,8 @@ const Schematic: React.FC = () => {
       <Token d={P.gateToYield} start={1345} dur={48} />
       {/* Aave hands it back, with interest. */}
       <Token d={P.yieldToTreasury} start={1800} dur={104} label="+0.1654" />
+      {/* An invoice, paid only after the gate says so. */}
+      <Token d={P.gateToAgent} start={2390} dur={124} label="0.01 USDC" />
     </svg>
   );
 };
@@ -276,10 +282,17 @@ export const Demo: React.FC = () => {
     /* Back up the return leg to the treasury the money lands in. */
     { at: 1900, x: 620, y: 160, scale: 0.95 },
     { at: 2080, x: 620, y: 160, scale: 0.95 },
+    /*
+      Down to the agent being paid. Framed left of centre so it clears the panel
+      on the right and the caption along the bottom, with Aave stacked directly
+      above it — the two counterparties this treasury deals with, in one shot.
+    */
+    { at: 2240, x: 1350, y: 915, scale: 0.8 },
+    { at: 2420, x: 1360, y: 925, scale: 0.79 },
     /* Out, for the tally. */
-    { at: 2260, x: 430, y: 300, scale: 0.7 },
-    { at: 2430, x: 430, y: 300, scale: 0.68 },
-    { at: 2650, x: 430, y: 300, scale: 0.66 },
+    { at: 2620, x: 430, y: 300, scale: 0.7 },
+    { at: 2800, x: 430, y: 300, scale: 0.68 },
+    { at: 3020, x: 430, y: 300, scale: 0.66 },
   ]);
 
   return (
@@ -426,13 +439,37 @@ export const Demo: React.FC = () => {
         The revenue it splits <Em>is revenue it made</Em>.
       </Caption>
 
-      <Counters at={2300} />
-
-      <Caption at={2460} hold={140} bottom sub="Payout · Sweep · Yield · Withdraw · Keeper · Reconcile · Earn">
-        Seven legs. Every one <Em>a transaction</Em>.
+      {/* Buying, which is the leg KeeperHub's own issue tracker asked for. */}
+      <Caption at={2230} hold={120}>
+        And it <Em>pays other agents</Em>.
       </Caption>
 
-      <Closer at={2620} />
+      <Panel
+        at={2290}
+        hold={250}
+        side="right"
+        title="Lucid agent · one invoice, four answers"
+        lines={[
+          { text: "  asset has no configured limits", kind: "dim" },
+          { text: "    refused", kind: "warn" },
+          { text: "  price feed 18 hours stale", kind: "dim" },
+          { text: "    refused", kind: "warn" },
+          { text: "  everything clears", kind: "dim" },
+          { text: "    pay — within policy, 0.01 USDC", kind: "ok" },
+        ]}
+      />
+
+      <Caption at={2390} hold={170} bottom sub="A price cap can only ask the first">
+        Their spec said <Em>a price cap</Em>.
+      </Caption>
+
+      <Counters at={2660} />
+
+      <Caption at={2820} hold={140} bottom sub="Payout · Sweep · Yield · Withdraw · Keeper · Reconcile · Earn · Buy">
+        Eight legs. Every one <Em>a transaction</Em>.
+      </Caption>
+
+      <Closer at={2980} />
     </AbsoluteFill>
   );
 };

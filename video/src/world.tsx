@@ -15,7 +15,10 @@ import { chalk, chalkDim, coral } from "./theme";
  * the same journey.
  */
 export const WORLD_W = 2400;
-export const WORLD_H = 1350;
+// Tall enough to hold the counterparty agent below the pool. A node placed
+// past this is silently clipped by the SVG canvas — its edges still draw,
+// which makes the omission look like a styling bug rather than a bounds one.
+export const WORLD_H = 1800;
 
 export type Shot = { at: number; x: number; y: number; scale: number };
 

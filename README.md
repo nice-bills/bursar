@@ -398,14 +398,17 @@ payout.
 
 One continuous move through the schematic, never a cut: value enters, the gate
 refuses what breaks policy, the payout proves itself, a 409 is reconciled under
-its original key, Aave answers for its own position, and the listing sends an
-invoice.
+its original key, Aave answers for its own position, the listing sends an
+invoice, and the treasury pays another agent's.
 
 Every terminal panel quotes real output this repo produced.
 `video/captured-run.txt` is the session they are read from, hashes included —
 nothing in the film is typed for the camera.
 
-`cd video && npm install && npm run render`.
+`cd video && npm install && npm run render`. The fonts are committed under
+`video/public/fonts`, so a clone renders the same frames without reaching the
+network — loading them from Google at render time makes a slow connection look
+like a broken renderer.
 
 ## Setup
 
