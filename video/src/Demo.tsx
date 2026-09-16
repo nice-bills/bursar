@@ -264,13 +264,18 @@ export const Demo: React.FC = () => {
     { at: 860, x: 900, y: 250, scale: 0.95 },
     { at: 980, x: 860, y: 430, scale: 1.1 },
     { at: 1180, x: 860, y: 430, scale: 1.1 },
-    /* Down to Aave, and stay while the protocol answers for itself. */
-    { at: 1300, x: 1150, y: 800, scale: 0.92 },
-    { at: 1480, x: 1150, y: 830, scale: 0.9 },
-    { at: 1700, x: 1100, y: 760, scale: 0.88 },
+    /*
+      Down to Aave — but not so far down that the sheet runs out. The world
+      ends just below the pool, so a camera centred on it frames half a screen
+      of empty paper; sitting higher keeps the policy gate and the keeper in
+      shot above, which is what gives the frame its weight.
+    */
+    { at: 1300, x: 980, y: 300, scale: 0.85 },
+    { at: 1480, x: 1000, y: 310, scale: 0.84 },
+    { at: 1700, x: 1020, y: 300, scale: 0.86 },
     /* Back up the return leg to the treasury the money lands in. */
-    { at: 1900, x: 700, y: 360, scale: 1.0 },
-    { at: 2080, x: 700, y: 360, scale: 1.0 },
+    { at: 1900, x: 620, y: 160, scale: 0.95 },
+    { at: 2080, x: 620, y: 160, scale: 0.95 },
     /* Out, for the tally. */
     { at: 2260, x: 430, y: 300, scale: 0.7 },
     { at: 2430, x: 430, y: 300, scale: 0.68 },
