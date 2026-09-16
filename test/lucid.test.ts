@@ -7,9 +7,9 @@ import { join } from "node:path";
 import { configSchema, type Contributor } from "../src/config.js";
 import { Ledger, dailyPeriod } from "../src/ledger/store.js";
 import { PolicyEngine } from "../src/policy/engine.js";
-import { readAgentCard, LucidAgent } from "../src/lucid/client.js";
+import { readAgentCard, LucidAgent, decodeChallengeHeader } from "../src/lucid/client.js";
 import { planPayment, chainIdFromNetwork } from "../src/lucid/pay.js";
-import type { PaymentChallenge } from "../src/keeperhub/mcp.js";
+import { readPaymentChallenge, type PaymentChallenge } from "../src/keeperhub/mcp.js";
 
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const ORACLE = "0x069C76420DD98cAfa97cc1D349BC1cC708284032";
@@ -349,5 +349,142 @@ describe("deciding whether to pay an invoice", () => {
       // treasury one invoice at a time without touching the payout budget.
       assert.equal(await ledger.movedSince(since, USDC), 10_000n);
     });
+  });
+});
+
+/**
+ * The card a running Lucid agent actually serves, abridged to the parts that
+ * decide anything. Captured from `examples/lucid-agent` — not hand-written,
+ * because every assumption made about this shape before it was fetched turned
+ * out to be wrong in the direction that reads a paid entrypoint as free.
+ */
+const SERVED_CARD = {
+  protocolVersion: "1.0",
+  name: "counterparty-oracle",
+  version: "1.0.0",
+  description: "Answers whether an address is safe to pay. Free health check, priced verdict.",
+  capabilities: { streaming: false, pushNotifications: false },
+  // The A2A view: every capability, none of the prices.
+  skills: [
+    { id: "health", name: "health", description: "Liveness check. Free." },
+    { id: "counterparty-check", name: "counterparty-check", description: "Vouch for a payee." },
+  ],
+  // The Lucid view: keyed by name, and where the pricing lives.
+  entrypoints: {
+    health: {
+      description: "Liveness check. Free.",
+      input_schema: { type: "object", properties: {} },
+    },
+    "counterparty-check": {
+      description: "Given an address, report whether this oracle vouches for it as a payee.",
+      input_schema: {
+        type: "object",
+        properties: { address: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" } },
+        required: ["address"],
+      },
+      payment_protocol: "x402",
+      network: "eip155:84532",
+      pricing: { invoke: "10000" },
+    },
+  },
+  // And the asset, which appears exactly once, here.
+  payments: [
+    {
+      method: "x402",
+      payee: ORACLE,
+      network: "eip155:84532",
+      endpoint: "https://x402.org/facilitator",
+      priceModel: { default: "10000" },
+      extensions: {
+        x402: {
+          scheme: "exact",
+          network: "eip155:84532",
+          payTo: ORACLE,
+          facilitatorUrl: "https://x402.org/facilitator",
+          price: { amount: "10000", asset: USDC },
+        },
+      },
+    },
+  ],
+};
+
+describe("the card a real agent serves", () => {
+  test("keyed entrypoints win over the skills array", () => {
+    // Both list the same two capabilities. Only one of them carries pricing,
+    // and preferring the array because it is an array reads the paid
+    // entrypoint as free — which is how the connector calls it without asking
+    // anyone, and learns the price from the 402.
+    const card = readAgentCard(SERVED_CARD);
+    assert.equal(card.entrypoints.length, 2);
+
+    const paid = card.entrypoints.find((e) => e.key === "counterparty-check");
+    assert.equal(paid?.priced, true, "the priced entrypoint must not read as free");
+    assert.equal(paid?.priceAmount, "10000");
+  });
+
+  test("the asset is taken from the card's payment methods", () => {
+    // An entrypoint states its price and network; the asset it is denominated
+    // in appears once, at the top of the card. A price without its asset is a
+    // number with no units, and the treasury refuses to pay those.
+    const card = readAgentCard(SERVED_CARD);
+    const paid = card.entrypoints.find((e) => e.key === "counterparty-check");
+    assert.equal(paid?.priceAsset, USDC);
+    assert.equal(paid?.payTo, ORACLE);
+    assert.equal(paid?.network, "eip155:84532");
+  });
+
+  test("a free entrypoint does not inherit the card's price", () => {
+    const card = readAgentCard(SERVED_CARD);
+    const free = card.entrypoints.find((e) => e.key === "health");
+    assert.equal(free?.priced, false);
+    assert.equal(free?.priceAmount, undefined);
+    assert.equal(free?.priceAsset, undefined);
+  });
+
+  test("the published input schema survives", () => {
+    const card = readAgentCard(SERVED_CARD);
+    const paid = card.entrypoints.find((e) => e.key === "counterparty-check");
+    const schema = paid?.inputSchema as { required?: string[] };
+    assert.deepEqual(schema?.required, ["address"]);
+  });
+});
+
+describe("a challenge carried in the headers", () => {
+  const terms = {
+    x402Version: 2,
+    error: "Payment required",
+    accepts: [
+      {
+        scheme: "exact",
+        network: "eip155:84532",
+        amount: "10000",
+        asset: USDC,
+        payTo: ORACLE,
+      },
+    ],
+  };
+
+  test("base64 payment-required is decoded", () => {
+    // Confirmed against the running agent: the 402 body is `{}` and the terms
+    // travel in this header. Reading only the body reports a paid call as free.
+    const headers = new Headers({
+      "payment-required": Buffer.from(JSON.stringify(terms)).toString("base64"),
+    });
+    const decoded = decodeChallengeHeader(headers);
+    const challenge = readPaymentChallenge(decoded, "");
+    assert.ok(challenge);
+    assert.equal(challenge.maxAmountRequired, "10000");
+    assert.equal(challenge.asset, USDC);
+    assert.equal(challenge.payTo, ORACLE);
+  });
+
+  test("a header sent as plain JSON is read too", () => {
+    const headers = new Headers({ "payment-required": JSON.stringify(terms) });
+    assert.ok(readPaymentChallenge(decodeChallengeHeader(headers), ""));
+  });
+
+  test("no payment header yields nothing rather than throwing", () => {
+    assert.equal(decodeChallengeHeader(new Headers()), null);
+    assert.equal(decodeChallengeHeader(new Headers({ "payment-required": "@@@" })), null);
   });
 });

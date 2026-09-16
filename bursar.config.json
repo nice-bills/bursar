@@ -53,6 +53,13 @@
         "maxPerTransfer": "3000000000000000000",
         "maxPerDay": "10000000000000000000",
         "priceFeed": "0xc59E3633BAAC79493d908e63626716e204A45EdF"
+      },
+      "0x036CbD53842c5426634e7929541eC2318f3dCF7e": {
+        "symbol": "USDC",
+        "decimals": 6,
+        "maxPerTransfer": "50000",
+        "maxPerDay": "250000",
+        "priceFeed": "0xd30e2101a97dcbAeBCBC04F14C3f624E67A35165"
       }
     },
     "nativePriceFeed": "0x694AA1769357215DE4FAC081bf1f309aDC325306",

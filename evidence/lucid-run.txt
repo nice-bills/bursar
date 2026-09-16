@@ -1,0 +1,76 @@
+=== 1. DEFAULT POLICY — the stale-price refusal ===
+
+────────────────────────────────────────────────────────────────────────
+1. DISCOVER — http://localhost:4021/.well-known/agent-card.json
+────────────────────────────────────────────────────────────────────────
+   counterparty-oracle v1.0.0
+   Answers whether an address is safe to pay. Free health check, priced verdict.
+
+   entrypoints:
+     health                 free
+       Liveness check. Free.
+     counterparty-check     10000 of 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+       Given an address, report whether this oracle vouches for it as a payee.
+
+────────────────────────────────────────────────────────────────────────
+2. INVOKE (free) — health
+────────────────────────────────────────────────────────────────────────
+   {"ok":true,"name":"counterparty-oracle"}
+
+────────────────────────────────────────────────────────────────────────
+3. INVOKE (priced) — counterparty-check
+────────────────────────────────────────────────────────────────────────
+   HTTP 402 — the agent wants paying first
+     amount : 10000
+     asset  : 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+     network: eip155:84532
+     payTo  : 0x069C76420DD98cAfa97cc1D349BC1cC708284032
+
+────────────────────────────────────────────────────────────────────────
+4. POLICY — what Bursar makes of that bill
+────────────────────────────────────────────────────────────────────────
+   ✗ REFUSE — could not value this movement: Feed 0xd30e2101a97dcbAeBCBC04F14C3f624E67A35165 last published 65764s ago, over the 3600s limit. Refusing to value a movement against a stale price.
+     price  : 0.01 USDC
+     intent : bursar-3651629d477586815a566efecac02721
+
+   Refused. The agent does not get to talk the treasury past this.
+
+
+=== 2. STALENESS BOUND RELAXED FOR A TESTNET FEED ===
+
+────────────────────────────────────────────────────────────────────────
+1. DISCOVER — http://localhost:4021/.well-known/agent-card.json
+────────────────────────────────────────────────────────────────────────
+   counterparty-oracle v1.0.0
+   Answers whether an address is safe to pay. Free health check, priced verdict.
+
+   entrypoints:
+     health                 free
+       Liveness check. Free.
+     counterparty-check     10000 of 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+       Given an address, report whether this oracle vouches for it as a payee.
+
+────────────────────────────────────────────────────────────────────────
+2. INVOKE (free) — health
+────────────────────────────────────────────────────────────────────────
+   {"ok":true,"name":"counterparty-oracle"}
+
+────────────────────────────────────────────────────────────────────────
+3. INVOKE (priced) — counterparty-check
+────────────────────────────────────────────────────────────────────────
+   HTTP 402 — the agent wants paying first
+     amount : 10000
+     asset  : 0x036CbD53842c5426634e7929541eC2318f3dCF7e
+     network: eip155:84532
+     payTo  : 0x069C76420DD98cAfa97cc1D349BC1cC708284032
+
+────────────────────────────────────────────────────────────────────────
+4. POLICY — what Bursar makes of that bill
+────────────────────────────────────────────────────────────────────────
+   (price staleness bound relaxed to 172800s for this run)
+   ✓ PAY — within policy — 0.01 USDC
+     price  : 0.01 USDC
+     intent : bursar-3651629d477586815a566efecac02721
+
+   Policy cleared it. Settlement would sign the x402 challenge and retry
+   the call with the signature, recording the intent first.

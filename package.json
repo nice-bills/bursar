@@ -20,7 +20,8 @@
     "agent": "tsx scripts/agent.ts",
     "context-cost": "tsx scripts/context-cost.ts",
     "prepare": "npm run build",
-    "aave": "tsx scripts/aave.ts"
+    "aave": "tsx scripts/aave.ts",
+    "lucid": "tsx scripts/lucid.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

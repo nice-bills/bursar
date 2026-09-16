@@ -73,6 +73,34 @@ export class LucidError extends Error {
   }
 }
 
+/**
+ * Read an x402 challenge out of the response headers.
+ *
+ * Confirmed against a served Lucid agent: the 402 body is `{}` and the terms
+ * arrive base64-encoded in `payment-required`. The header name is checked in a
+ * couple of spellings because this part of x402 is carried differently by
+ * different servers, and the cost of missing it is treating an invoice as free.
+ */
+export function decodeChallengeHeader(headers: Headers): unknown {
+  for (const name of ["payment-required", "x-payment-required", "www-authenticate"]) {
+    const value = headers.get(name);
+    if (!value) continue;
+
+    // Some servers send it as JSON directly rather than base64.
+    const direct = parseEmbeddedJson(value);
+    if (direct !== null) return direct;
+
+    try {
+      const decoded = Buffer.from(value.trim(), "base64").toString("utf8");
+      const parsed = parseEmbeddedJson(decoded);
+      if (parsed !== null) return parsed;
+    } catch {
+      // Not base64 either; fall through to the next header name.
+    }
+  }
+  return null;
+}
+
 /** Strip a trailing slash so URL joining never doubles it. */
 function base(agentUrl: string): string {
   return agentUrl.replace(/\/+$/, "");
@@ -112,10 +140,17 @@ function readPricing(entry: Record<string, unknown>): Partial<AgentEntrypoint> {
   if (pricing) {
     return {
       priced: true,
-      priceAmount: str(pricing.amount) ?? str(pricing.price),
+      // A served card prices per call shape: `{"pricing": {"invoke": "10000"}}`.
+      priceAmount:
+        str(pricing.invoke) ?? str(pricing.amount) ?? str(pricing.price) ?? str(pricing.default),
       priceAsset: str(pricing.asset),
-      network: str(pricing.network),
+      network: str(pricing.network) ?? str(entry.network),
     };
+  }
+
+  // `payment_protocol` is how a served card marks an entrypoint as paid.
+  if (str(entry.payment_protocol)) {
+    return { priced: true, network: str(entry.network) };
   }
 
   if (entry.price !== undefined && entry.price !== null) {
@@ -129,12 +164,26 @@ function readPricing(entry: Record<string, unknown>): Partial<AgentEntrypoint> {
   return { priced: false };
 }
 
-/** Find the entrypoint list wherever the card puts it. */
+/**
+ * Find the entrypoints wherever the card puts them.
+ *
+ * A served Lucid card keys `entrypoints` by name — `{"health": {...}}` — and
+ * *also* publishes an A2A `skills` array listing the same capabilities without
+ * their pricing. Preferring the array because it is an array finds every
+ * entrypoint and none of the prices, which reads a paid entrypoint as free.
+ * The keyed object wins for that reason; `skills` is the fallback for cards
+ * that only speak A2A.
+ */
 function findEntrypoints(card: Record<string, unknown>): Array<Record<string, unknown>> {
   const direct = card.entrypoints;
+  if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+    return Object.entries(direct as Record<string, unknown>).map(([key, value]) => ({
+      key,
+      ...(value as Record<string, unknown>),
+    }));
+  }
   if (Array.isArray(direct)) return direct as Array<Record<string, unknown>>;
 
-  // A2A-shaped cards list capabilities as `skills`.
   const skills = card.skills;
   if (Array.isArray(skills)) return skills as Array<Record<string, unknown>>;
 
@@ -145,18 +194,58 @@ function findEntrypoints(card: Record<string, unknown>): Array<Record<string, un
   return [];
 }
 
+/**
+ * The card's payment methods, which is where the asset actually lives.
+ *
+ * An entrypoint states its price and network; the asset that price is
+ * denominated in sits once at the top of the card under `payments[]`. A price
+ * without its asset is a number with no units, and the treasury refuses to pay
+ * amounts it cannot denominate — so the two have to be brought together here.
+ */
+function findPaymentDefaults(card: Record<string, unknown>): Partial<AgentEntrypoint> {
+  const methods = card.payments;
+  if (!Array.isArray(methods) || methods.length === 0) return {};
+  const method = methods[0] as Record<string, unknown>;
+  const x402 = (method.extensions as Record<string, unknown> | undefined)?.x402 as
+    | Record<string, unknown>
+    | undefined;
+  const price = x402?.price as Record<string, unknown> | undefined;
+
+  return {
+    priceAsset: str(price?.asset),
+    network: str(x402?.network) ?? str(method.network),
+    payTo: str(x402?.payTo) ?? str(method.payee),
+    priceAmount: str(price?.amount),
+  };
+}
+
 /** Parse a served agent card. Exported so it can be tested against real ones. */
 export function readAgentCard(payload: unknown): AgentCard {
   const card = (payload ?? {}) as Record<string, unknown>;
 
+  const defaults = findPaymentDefaults(card);
+
   const entrypoints = findEntrypoints(card).map((entry): AgentEntrypoint => {
     const key = str(entry.key) ?? str(entry.id) ?? str(entry.name) ?? "";
+    const pricing = readPricing(entry);
     return {
       key,
       description: str(entry.description),
-      inputSchema: entry.inputSchema ?? entry.input ?? undefined,
+      inputSchema:
+        entry.input_schema ?? entry.inputSchema ?? entry.x_input_schema ?? entry.input ?? undefined,
       priced: false,
-      ...readPricing(entry),
+      ...pricing,
+      // Card-level payment details fill in what the entrypoint left out — the
+      // asset especially, which is never stated per entrypoint. Only for paid
+      // ones: a free entrypoint must not inherit a price.
+      ...(pricing.priced
+        ? {
+            priceAmount: pricing.priceAmount ?? defaults.priceAmount,
+            priceAsset: pricing.priceAsset ?? defaults.priceAsset,
+            network: pricing.network ?? defaults.network,
+            payTo: pricing.payTo ?? defaults.payTo,
+          }
+        : {}),
     };
   });
 
@@ -247,8 +336,24 @@ export class LucidAgent {
     const parsed = parseEmbeddedJson(text);
 
     if (response.status === 402) {
-      const challenge = readPaymentChallenge(parsed, text);
-      return { output: null, challenge, status: 402, raw: parsed ?? text };
+      // The terms are not necessarily in the body. A Lucid agent answers with
+      // an empty `{}` and carries the whole challenge in a base64
+      // `payment-required` header; KeeperHub's marketplace puts it in the body.
+      // Reading only one of those places means a paid call reads as free.
+      const fromHeader = decodeChallengeHeader(response.headers);
+      // Header first, but without the text fallback: `readPaymentChallenge`
+      // treats any body mentioning "x402" as an undecodable challenge, and that
+      // truthy-but-empty result would short-circuit the body parse that has the
+      // actual terms. Each source is tried for a *decodable* challenge first,
+      // and only then is the fallback allowed to fire, once.
+      const challenge =
+        readPaymentChallenge(fromHeader, "") ?? readPaymentChallenge(parsed, text);
+      return {
+        output: null,
+        challenge,
+        status: 402,
+        raw: fromHeader ?? parsed ?? text,
+      };
     }
 
     if (!response.ok) {
