@@ -17,6 +17,12 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 
 /**
+ * `purchase` is the agent buying something — paying another agent's x402
+ * invoice for a service it wanted. It is outbound like a payout and counted
+ * against every cap for the same reason, but kept distinct because "we paid a
+ * contributor" and "we bought a counterparty check" are different questions to
+ * ask the ledger later.
+ *
  * `earning` is the only leg that points inward.
  *
  * Everything else here is the treasury spending; an earning is the treasury
@@ -25,7 +31,7 @@ import { dirname } from "node:path";
  * counterparty, a transaction) and because the split that follows has to be
  * auditable against the income that justified it.
  */
-export type Leg = "sweep" | "payout" | "float" | "yield" | "earning";
+export type Leg = "sweep" | "payout" | "float" | "yield" | "earning" | "purchase";
 
 export type EntryStatus =
   | "intent"

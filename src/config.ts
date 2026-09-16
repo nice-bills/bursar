@@ -140,6 +140,21 @@ const policySchema = z.object({
   /** Above this, Bursar refuses to act autonomously and asks for a human. */
   requireApprovalAbove: baseUnits.optional(),
   /**
+   * The same escalation, in whole US cents, so it binds every asset.
+   *
+   * `requireApprovalAbove` is denominated in the native asset and can only
+   * govern native movements — 5000 base units of USDC cannot be compared
+   * against a wei threshold without a price. That leaves token spending
+   * unescalated at any size, which matters most for exactly the case it was
+   * written for: an agent paying invoices, which it does in stablecoins.
+   *
+   * Needs the same price feeds the cross-asset ceiling uses.
+   */
+  requireApprovalAboveUsd: z
+    .string()
+    .regex(/^\d+$/, "whole US cents, as digits")
+    .optional(),
+  /**
    * Per-token limits, keyed by contract address. A token with no entry cannot
    * move at all — the native caps do not apply to it and guessing is worse
    * than refusing.

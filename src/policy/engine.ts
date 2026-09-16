@@ -96,6 +96,19 @@ export class PolicyEngine {
     return allowed;
   }
 
+  /**
+   * The aggregator that prices this movement's asset.
+   *
+   * Native and token movements read different config fields, and both the
+   * daily ceiling and the approval threshold need the answer — so it lives in
+   * one place rather than being derived twice and drifting.
+   */
+  private priceFeedFor(movement: Movement): string | undefined {
+    return movement.token === null
+      ? this.config.policy.nativePriceFeed
+      : assetPolicyFor(this.config.policy, movement.token)?.priceFeed;
+  }
+
   async evaluate(movement: Movement): Promise<Decision> {
     const amount = parseAmount(movement.amount);
     if (amount === null) {
@@ -228,10 +241,7 @@ export class PolicyEngine {
     //    unreconciled ledger — would have rejected anyway.
     const ceiling = this.config.policy.maxPerDayUsd;
     if (ceiling !== undefined) {
-      const feed =
-        movement.token === null
-          ? this.config.policy.nativePriceFeed
-          : assetPolicyFor(this.config.policy, movement.token)?.priceFeed;
+      const feed = this.priceFeedFor(movement);
 
       if (!this.valuation || !feed) {
         return {
@@ -274,14 +284,63 @@ export class PolicyEngine {
 
     // 8. Human escalation threshold — last, so the reason returned is the most
     //    actionable one rather than an approval prompt masking a hard failure.
-    //    Only meaningful for the native asset it is denominated in.
-    const threshold =
+    //
+    //    Two thresholds, because one of them cannot see most spending.
+    //    `requireApprovalAbove` is denominated in the native asset, so it can
+    //    only govern native movements: 5000 base units of USDC against a wei
+    //    threshold is not a comparison. That left token spending unescalated at
+    //    any size — which is precisely the case this exists for, since an agent
+    //    paying invoices pays in stablecoins.
+    const nativeThreshold =
       movement.token === null ? this.config.policy.requireApprovalAbove : undefined;
-    if (threshold !== undefined && amount > BigInt(threshold)) {
+    if (nativeThreshold !== undefined && amount > BigInt(nativeThreshold)) {
       return {
         verdict: "needs_approval",
-        reason: `amount ${amount} exceeds requireApprovalAbove ${threshold}`,
+        reason: `amount ${amount} exceeds requireApprovalAbove ${nativeThreshold}`,
       };
+    }
+
+    const usdThreshold = this.config.policy.requireApprovalAboveUsd;
+    if (usdThreshold !== undefined) {
+      // Reuse the valuation the ceiling already computed when it ran; only
+      // price it here when no ceiling is configured.
+      let valueCents: bigint | null =
+        movement.valueUsdCents !== undefined ? BigInt(movement.valueUsdCents) : null;
+
+      if (valueCents === null) {
+        const feed = this.priceFeedFor(movement);
+        if (!this.valuation || !feed) {
+          // Fail closed, consistently with the ceiling: a threshold that cannot
+          // be evaluated must not wave the movement through.
+          return {
+            verdict: "deny",
+            reason:
+              `a USD approval threshold is set but ${movement.token ?? "the native asset"} ` +
+              `has no price feed available, so this movement cannot be measured against it`,
+          };
+        }
+        try {
+          valueCents = await this.valuation.valueInCents(
+            amount,
+            movement.decimals,
+            movement.chainId,
+            feed,
+          );
+          movement.valueUsdCents = valueCents.toString();
+        } catch (error) {
+          const why = error instanceof ValuationError ? error.message : String(error);
+          return { verdict: "deny", reason: `could not value this movement: ${why}` };
+        }
+      }
+
+      if (valueCents > BigInt(usdThreshold)) {
+        return {
+          verdict: "needs_approval",
+          reason:
+            `${formatUsd(valueCents)} exceeds the ${formatUsd(BigInt(usdThreshold))} ` +
+            `approval threshold`,
+        };
+      }
     }
 
     return { verdict: "allow" };
