@@ -6,9 +6,11 @@ Ready to paste. Nothing here claims more than the transaction links show.
 
 ## One-liner
 
-An onchain treasury for AI agents, with KeeperHub as the execution layer and
-Aave v3 wired in both directions — the protocol's own state decides when value
-moves, and Bursar earns its own revenue on KeeperHub's marketplace.
+An onchain treasury for AI agents, with KeeperHub as the execution layer: Aave
+v3 wired in both directions so the protocol's own state decides when value
+moves, a priced listing on KeeperHub's marketplace so the revenue it splits is
+revenue it made, and a Lucid Agents connector so it can pay other agents'
+invoices under policy rather than under a price cap.
 
 ---
 
@@ -87,6 +89,48 @@ Listing: `bursar-payout-preflight` ·
 
 ---
 
+## It also pays other agents, under policy
+
+[KeeperHub issue #2329](https://github.com/KeeperHub/keeperhub/issues/2329) is
+open and unassigned. It asks for a connector so a workflow can discover and call
+a Lucid Agents entrypoint, free or x402-priced, and proposes protecting the money
+with "a dedicated, low-balance payer key" plus a per-call `maxPriceUsd`.
+
+Bursar ships that connector, with the decision handed to its policy engine
+instead. Run against a real Lucid Agent built from Daydreams' own SDK, the same
+invoice produces four different answers:
+
+| Situation | Bursar |
+| --- | --- |
+| Asset has no configured limits | refuses |
+| Chainlink feed is 18 hours stale | refuses |
+| Everything clears | pays — `within policy — 0.01 USDC` |
+| Above the approval threshold | holds for a person |
+
+Only the first is a question a price cap can ask.
+
+`@x402/fetch` offers a wrapped fetch that pays any 402 it meets — the obvious
+way to build this, and the wrong one, since it would route money around the
+engine rather than through it. The paying fetch is never used for the first
+call, and settlement refuses outright if handed a plan the engine did not
+approve.
+
+Pointing it at a running agent corrected three things the specification does not
+mention, each failing in the same direction — reading a paid entrypoint as free.
+A served card keys `entrypoints` by name while *also* publishing an A2A `skills`
+array without pricing; the asset a price is denominated in appears once at the
+top of the card, never on the entrypoint; and the x402 challenge is not in the
+402 body at all, but base64-encoded in a `payment-required` header — where
+KeeperHub's own marketplace puts it in the body.
+
+It also surfaced a bug in our own policy engine that predates this work: the
+approval threshold only applied to the native asset, so **token spending
+escalated to a human at no size at all**. A 0.005 ETH payout would be held while
+a 10,000 USDC invoice sailed through — exactly backwards for an agent paying
+invoices, which it does in stablecoins.
+
+Details: [`evidence/lucid-agents.md`](./evidence/lucid-agents.md)
+
 ## Why it is not a wrapper
 
 KeeperHub's MCP server exposes 44 tools whose definitions run to ~13k tokens,
@@ -119,7 +163,7 @@ succeeded. Bursar's refusal to guess is what prevented a double payment; the
 movement was replayed under its original idempotency key and the original
 transaction came back.
 
-172 tests. Every parser is pinned against captured wire data rather than
+209 tests. Every parser is pinned against captured wire data rather than
 invented fixtures.
 
 ---
@@ -133,6 +177,10 @@ npm run demo -- --execute     # the whole money loop
 npm run aave                  # read the live Aave position
 npm run listing -- --verify   # the listing's x402 challenge
 npm run chaos -- --execute    # crash recovery
+
+# and the agent-to-agent leg, against a real Lucid Agent
+cd examples/lucid-agent && npm install && npm start
+npm run lucid
 ```
 
 Run the demo twice. The second run pays nobody, because every movement is
