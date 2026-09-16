@@ -81,3 +81,57 @@
    Reconciled 1 of 1 open movement(s).
      bursar-806054d04f6616503640bdbd5f17e219: confirmed, already executed (0x8f8c37284de3028682e848bd8fa355e9fe7d1a6f6ba5243c97d96ab2f3824503)
    Treasury is unlocked.
+
+════════════════════════════════════════════════════════════════════════
+ AAVE V3 — the live protocol, read as well as written  (npm run aave)
+════════════════════════════════════════════════════════════════════════
+
+Reading account health from Aave...
+  collateral     : $154.96
+  debt           : $0.00
+  borrowing power: $108.47
+  health factor  : no debt
+  LTV            : 70%
+
+Reading the LINK position from Aave... (three reads, minutes apart)
+  supplied  : 5.165120505432263390 LINK (aToken)
+  supplied  : 5.165395463617371347 LINK (aToken)
+  supplied  : 5.165400046253789813 LINK (aToken)
+  supply APY: 234.37% (23437 bps)
+
+  supplied by Bursar: 5 LINK
+  accrued interest  : 0.165400046253789813 LINK
+
+  deploy surplus? yes — Aave is paying 234.37%
+
+Withdrawing 0.065 LINK from Aave...
+  success : yes
+  reverted: false
+  tx      : https://sepolia.etherscan.io/tx/0xd96c8ee7187ddf833f6acb13f32e23fd92d09c6c5469a9e5c12c9b13590656fb
+
+  position after: 5.000445359287327522 LINK — principal intact, yield harvested
+
+════════════════════════════════════════════════════════════════════════
+ THE RATE KEEPER — Aave's own rate triggers the movement
+════════════════════════════════════════════════════════════════════════
+
+Authoring the rate keeper — floor 1.00%...
+  the rate cleared the floor — the gate held and nothing moved
+  output: {"condition":false}
+
+Authoring the rate keeper — floor 300.00%...
+  the rate was below the floor — the keeper withdrew, with no agent involved
+  tx: https://sepolia.etherscan.io/tx/0x10f52eadf477d85a439a9a7b3ce75c8aa55cec42aaad6a0b113236d8a236ee20
+
+════════════════════════════════════════════════════════════════════════
+ THE LISTING — Bursar sells a service  (npm run listing -- --verify)
+════════════════════════════════════════════════════════════════════════
+
+✓ bursar-payout-preflight is in the catalogue.
+  priceUsdcPerCall: "0.01"   isListed: true   chain: base
+
+✓ The listing demanded payment before doing the work.
+  price   : 10000 base units
+  network : eip155:8453
+  asset   : 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+  payTo   : 0x8d9abc5b07917229159886be02e5eed1dc7fbdc9

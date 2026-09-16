@@ -357,9 +357,16 @@ payout.
 
 ## The demo video
 
-`video/` renders it with Remotion from output this repo produced —
-`video/captured-run.txt` is the session its terminal panels quote, hashes
-included. `cd video && npm install && npm run render`.
+One continuous move through the schematic, never a cut: value enters, the gate
+refuses what breaks policy, the payout proves itself, a 409 is reconciled under
+its original key, Aave answers for its own position, and the listing sends an
+invoice.
+
+Every terminal panel quotes real output this repo produced.
+`video/captured-run.txt` is the session they are read from, hashes included —
+nothing in the film is typed for the camera.
+
+`cd video && npm install && npm run render`.
 
 ## Setup
 
