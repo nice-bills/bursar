@@ -32,15 +32,25 @@ import { WEB3 } from "../treasury/workflows.js";
 export const PREFLIGHT_SLUG = "bursar-payout-preflight";
 
 /**
+ * Base. KeeperHub settles x402 here, and a listing must name a chain the
+ * platform recognises as a payment or data chain — Sepolia is rejected outright.
+ */
+export const PREFLIGHT_CHAIN_ID = "8453";
+export const PREFLIGHT_CHAIN = "base";
+
+/**
  * How a node refers to a value the caller supplied.
  *
- * Node-to-node references are `{{@nodeId:Label.field}}`, which KeeperHub's own
- * action schemas document. Caller inputs are a different surface and the docs do
- * not state their syntax, so this is verified against the live platform by
- * `npm run listing -- --probe` rather than assumed. Keep it in one constant so
- * there is exactly one place to correct.
+ * Caller inputs come through the trigger node, using the same
+ * `{{@nodeId:Label.field}}` shape as node-to-node references — the trigger is
+ * just another node. This is not documented anywhere; it was settled by
+ * publishing three listings that differed only in this reference and calling
+ * each one. `{{input.payer}}` and `{{payer}}` both fail with "Unresolved
+ * template reference(s)". Only this form resolves.
+ *
+ * Kept in one constant so there is exactly one place to correct.
  */
-export const INPUT_REF = (field: string): string => `{{input.${field}}}`;
+export const INPUT_REF = (field: string): string => `{{@trigger-1:Manual.${field}}}`;
 
 /**
  * The caller's side of the contract.
@@ -52,12 +62,8 @@ export const INPUT_REF = (field: string): string => `{{input.${field}}}`;
  */
 export const PREFLIGHT_INPUT_SCHEMA = {
   type: "object",
-  required: ["chainId", "payer", "amountWei"],
+  required: ["payer", "amountWei"],
   properties: {
-    chainId: {
-      type: "string",
-      description: "Chain the payment would go out on, e.g. '8453' for Base.",
-    },
     payer: {
       type: "string",
       description: "The address that would send the payment — usually the agent's own wallet.",
@@ -110,6 +116,8 @@ export function payoutPreflightWorkflow(): WorkflowDefinition {
   const reserve = INPUT_REF("gasReserveWei");
 
   return {
+    // A listed workflow that is not enabled answers every caller with 503.
+    enabled: true,
     name: "Bursar Payout Preflight",
     description:
       "Before an agent sends a payment, check the payment will not strand it. " +
@@ -136,7 +144,10 @@ export function payoutPreflightWorkflow(): WorkflowDefinition {
           label: "Check Balance",
           config: {
             actionType: WEB3.checkBalance,
-            network: INPUT_REF("chainId"),
+            // The listing targets one chain, declared on the listing itself, so
+            // the caller does not choose it and cannot be sent to a chain the
+            // price was not quoted for.
+            network: PREFLIGHT_CHAIN_ID,
             address: INPUT_REF("payer"),
           },
           status: "idle",

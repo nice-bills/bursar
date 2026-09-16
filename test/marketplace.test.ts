@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Ledger, dailyPeriod, type Leg } from "../src/ledger/store.js";
-import { readPaymentChallenge } from "../src/keeperhub/mcp.js";
+import { readPaymentChallenge, parseEmbeddedJson } from "../src/keeperhub/mcp.js";
 import {
   readPreflight,
   payoutPreflightWorkflow,
@@ -130,10 +130,70 @@ describe("reading an x402 challenge", () => {
     assert.equal(challenge.payTo, "0x069C76420DD98cAfa97cc1D349BC1cC708284032");
   });
 
+  test("the live KeeperHub challenge is read, field names and all", () => {
+    // Captured verbatim from calling our own published listing. The field is
+    // `amount` here and `maxAmountRequired` in the x402 spec's examples, and
+    // `resource` is an object rather than a string — reading only the spec
+    // shape means a paid listing parses as free.
+    const challenge = readPaymentChallenge({
+      x402Version: 2,
+      error: "Payment required",
+      resource: {
+        url: "https://app.keeperhub.com/api/mcp/workflows/bursar-payout-preflight/call",
+        description: "Pay to run workflow: Bursar Payout Preflight",
+        mimeType: "application/json",
+      },
+      accepts: [
+        {
+          scheme: "exact",
+          network: "eip155:8453",
+          asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          amount: "10000",
+          payTo: "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9",
+          maxTimeoutSeconds: 300,
+        },
+      ],
+    });
+
+    assert.ok(challenge);
+    assert.equal(challenge.maxAmountRequired, "10000"); // $0.01, USDC at 6dp
+    assert.equal(challenge.network, "eip155:8453");
+    assert.equal(challenge.asset, "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913");
+    assert.equal(challenge.payTo, "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9");
+    assert.match(challenge.resource ?? "", /bursar-payout-preflight/);
+  });
+
   test("a bare payment requirement is read too", () => {
     const challenge = readPaymentChallenge({ maxAmountRequired: "10000", network: "base" });
     assert.ok(challenge);
     assert.equal(challenge.maxAmountRequired, "10000");
+  });
+
+  test("a challenge wrapped in prose is still fully decoded", () => {
+    // The real transport response, abridged: the JSON body is prefixed with
+    // "API call failed..." and followed by a retry hint containing braces of
+    // its own. Slicing to the last brace swallows that prose and fails to
+    // parse; parsing the whole string fails too. Either mistake downgrades a
+    // fully readable challenge to an unreadable one — and the fallback path
+    // reports no price, no asset, and no payee.
+    const text =
+      'API call failed: 402 Payment Required - {"x402Version":2,"accepts":' +
+      '[{"scheme":"exact","network":"eip155:8453","amount":"10000",' +
+      '"payTo":"0x8d9abc5b07917229159886be02e5eed1dc7fbdc9"}]}\n\n' +
+      "Retry with one of:\n" +
+      "  - @keeperhub/wallet: `paymentSigner.fetch(url, { method: 'POST', body })`";
+
+    const challenge = readPaymentChallenge(parseEmbeddedJson(text), text);
+    assert.ok(challenge);
+    assert.equal(challenge.maxAmountRequired, "10000");
+    assert.equal(challenge.payTo, "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9");
+  });
+
+  test("a brace inside a string does not end the object early", () => {
+    const text = 'oops: {"description":"a } inside a string","amount":"1"} trailing }';
+    const parsed = parseEmbeddedJson(text) as Record<string, unknown>;
+    assert.equal(parsed?.amount, "1");
+    assert.equal(parsed?.description, "a } inside a string");
   });
 
   test("an undecodable 402 still counts as a demand for payment", () => {

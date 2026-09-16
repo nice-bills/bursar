@@ -356,6 +356,8 @@ export function aaveRateKeeperWorkflow(
   const rateRef = "{{@reserve-data:Aave Reserve Data.result.liquidityRate}}";
 
   return {
+    // Dormant by default on the platform, and the schedule is the entire point.
+    enabled: true,
     name: `Bursar Aave Rate Keeper ${symbol} — chain ${chainId}`,
     description:
       `Watch Aave v3's ${symbol} supply rate on chain ${chainId}. If it falls below ` +

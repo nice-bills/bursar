@@ -19,6 +19,7 @@ import { KeeperHubClient, KeeperHubError } from "../src/keeperhub/client.js";
 import { KeeperHubMcp } from "../src/keeperhub/mcp.js";
 import {
   PREFLIGHT_SLUG,
+  PREFLIGHT_CHAIN,
   PREFLIGHT_INPUT_SCHEMA,
   PREFLIGHT_OUTPUT_MAPPING,
   DEFAULT_GAS_RESERVE_WEI,
@@ -29,8 +30,8 @@ const PROBE = process.argv.includes("--probe");
 const PUBLISH = process.argv.includes("--publish");
 const VERIFY = process.argv.includes("--verify");
 
-/** Base. KeeperHub settles x402 here, so the listing should target it. */
-const CHAIN = "8453";
+/** What the service costs per call, in USDC. */
+const PRICE_USDC = "0.01";
 
 function show(label: string, value: unknown, limit = 2000): void {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -104,15 +105,32 @@ async function main(): Promise<void> {
     if (!workflowId) throw new Error("The platform returned no workflow id.");
     console.log(`view: https://app.keeperhub.com/workflows/${workflowId}`);
 
+    // Price first, then publish. The platform refuses a price change while a
+    // workflow is listed — "unlist first, update price, then re-list" — so
+    // setting it before the listing exists is the only order that works on a
+    // first publish, and re-running this on an already-listed workflow would
+    // need the unlist step.
+    const priced = await mcp.updateWorkflowListing({
+      workflowId,
+      priceUsdcPerCall: PRICE_USDC,
+      category: "defi",
+      chain: PREFLIGHT_CHAIN,
+      workflowType: "read",
+      inputSchema: PREFLIGHT_INPUT_SCHEMA as unknown as Record<string, unknown>,
+      outputMapping: PREFLIGHT_OUTPUT_MAPPING as unknown as Record<string, unknown>,
+    });
+    show(`priced at $${PRICE_USDC}/call`, priced, 600);
+
     const listed = await mcp.listWorkflow({
       workflowId,
       slug: PREFLIGHT_SLUG,
       category: "defi",
-      chain: CHAIN,
+      chain: PREFLIGHT_CHAIN,
+      workflowType: "read",
       inputSchema: PREFLIGHT_INPUT_SCHEMA as unknown as Record<string, unknown>,
       outputMapping: PREFLIGHT_OUTPUT_MAPPING as unknown as Record<string, unknown>,
     });
-    show("list_workflow result", listed);
+    show("list_workflow result", listed, 600);
   }
 
   if (VERIFY) {
@@ -128,7 +146,6 @@ async function main(): Promise<void> {
     show("catalogue entry", catalogue, 2000);
 
     const outcome = await mcp.callWorkflow(PREFLIGHT_SLUG, {
-      chainId: CHAIN,
       payer: "0x069C76420DD98cAfa97cc1D349BC1cC708284032",
       amountWei: "1000000000000000",
       gasReserveWei: DEFAULT_GAS_RESERVE_WEI,

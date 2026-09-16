@@ -164,12 +164,7 @@ export class KeeperHubMcp {
       response.error?.message ??
       "";
 
-    let parsed: unknown = null;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      parsed = null;
-    }
+    const parsed = parseEmbeddedJson(text);
 
     return {
       isError: Boolean(response.result?.isError || response.error),
@@ -309,7 +304,15 @@ export interface ToolOutcome {
  * what it is, not decoding every field of it.
  */
 export interface PaymentChallenge {
-  /** The asset's base units, as a decimal string. USDC has 6 decimals. */
+  /**
+   * The price, in the asset's base units, as a decimal string. USDC has 6
+   * decimals, so $0.01 arrives as "10000".
+   *
+   * KeeperHub's live challenge calls this `amount`; the x402 spec's own
+   * examples call it `maxAmountRequired`. Both are read into this one field —
+   * the alternative is a parser that silently finds no price and reports a paid
+   * listing as free.
+   */
   maxAmountRequired?: string;
   /** Where the payment settles — Base, for KeeperHub's x402. */
   network?: string;
@@ -322,6 +325,66 @@ export interface PaymentChallenge {
   description?: string;
   /** Everything, unabridged, for the audit record. */
   raw: unknown;
+}
+
+/**
+ * Parse a response body that may be wrapped in prose.
+ *
+ * The transport does not hand back a bare JSON body for errors — a payment
+ * challenge arrives as `API call failed: 402 Payment Required - {...}`. Parsing
+ * the whole string fails, and treating that failure as "no JSON" is how a fully
+ * decodable challenge ends up reported as an unreadable one.
+ *
+ * So: try the string whole, then try from the first brace to the last.
+ */
+export function parseEmbeddedJson(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // fall through
+  }
+  // Scan for the first balanced object rather than slicing to the last brace.
+  // The 402 body is followed by a human-readable retry hint that contains
+  // braces of its own — `{ method: 'POST', ... }` — so the last brace in the
+  // string belongs to prose, not to the JSON.
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === "\\" && inString) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          return JSON.parse(text.slice(start, i + 1));
+        } catch {
+          return null;
+        }
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -346,20 +409,32 @@ export function readPaymentChallenge(json: unknown, text = ""): PaymentChallenge
   const priced =
     terms != null &&
     (terms.maxAmountRequired !== undefined ||
+      terms.amount !== undefined ||
       terms.payTo !== undefined ||
       terms.scheme !== undefined);
 
   if (priced) {
+    const amount =
+      has("maxAmountRequired") ??
+      has("amount") ??
+      (typeof terms?.maxAmountRequired === "number"
+        ? String(terms.maxAmountRequired)
+        : typeof terms?.amount === "number"
+          ? String(terms.amount)
+          : undefined);
+
     return {
-      maxAmountRequired:
-        has("maxAmountRequired") ??
-        (typeof terms?.maxAmountRequired === "number"
-          ? String(terms.maxAmountRequired)
-          : undefined),
+      maxAmountRequired: amount,
       network: has("network"),
       asset: has("asset"),
       payTo: has("payTo"),
-      resource: has("resource"),
+      // The live challenge carries `resource` as an object with a url, while
+      // the spec's examples carry a bare string. Take the url either way.
+      resource:
+        has("resource") ??
+        (typeof (envelope?.resource as Record<string, unknown> | undefined)?.url === "string"
+          ? ((envelope!.resource as Record<string, unknown>).url as string)
+          : undefined),
       description: has("description"),
       raw: json,
     };

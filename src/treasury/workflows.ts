@@ -63,6 +63,17 @@ export interface WorkflowDefinition {
   description: string;
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
+  /**
+   * Whether the platform will act on this workflow's trigger.
+   *
+   * Defaults to false on KeeperHub, and a disabled workflow is skipped by
+   * schedule, event and block triggers — while still executing perfectly well
+   * when run by hand. That combination is how a keeper comes to look proven and
+   * be dormant: every manual run succeeds and the schedule never fires once.
+   *
+   * So anything whose whole purpose is to run unattended sets this explicitly.
+   */
+  enabled?: boolean;
 }
 
 /**
@@ -95,6 +106,8 @@ export function gasFloatWorkflow(
   const balanceRef = "{{@check-balance:Check Balance.balanceWei}}";
 
   return {
+    // A keeper that is not enabled is a keeper that never runs.
+    enabled: true,
     name: `Bursar Gas Keeper — chain ${float.chainId}`,
     description:
       `Keep ${float.address} above ${floorLabel} native on chain ${float.chainId}, topping ` +
