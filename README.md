@@ -408,7 +408,42 @@ scenarios prove reconciliation against the chain rather than asserting it.
 
 ## Notes on the KeeperHub API
 
-Behaviour that differs from the docs, confirmed against the live API:
+Things the documentation does not say, found by running against it. Each one
+cost a debugging session, so they are written down.
+
+**A workflow is created disabled.** `enabled` defaults to false, and a disabled
+workflow still executes perfectly well when run by hand while being skipped by
+every schedule, event and block trigger. That combination is how a keeper comes
+to look proven and be dormant: each manual run succeeds and the schedule never
+fires once. Anything whose purpose is to run unattended must set it explicitly.
+
+**Caller inputs reach nodes through the trigger.** A listed workflow's inputs
+are referenced as `{{@trigger-1:Manual.field}}` — the same shape as node-to-node
+references, because the trigger is just another node. `{{input.field}}` and
+`{{field}}` both fail with "Unresolved template reference(s)". Settled by
+publishing three listings that differed only in that reference and calling each.
+
+**Pricing lives on the listing, not the publish call.** `priceUsdcPerCall` is a
+field on `update_workflow_listing`, and it can only be set while the workflow is
+unlisted — so price comes before publish, and changing it later means unlisting
+first.
+
+**A listing must name a payment chain.** Sepolia is rejected with
+`INVALID_CHAIN`; a listing has to target something the platform recognises as a
+payment or data chain, such as Base.
+
+**The x402 challenge does not match the spec's examples.** KeeperHub sends
+`amount` where the examples send `maxAmountRequired`, sends `resource` as an
+object rather than a string, and wraps the JSON body in prose whose retry hint
+contains braces of its own. A parser that slices to the last brace, or that
+reads only the spec's field names, reports a paid listing as free.
+
+**Aave read nodes nest their output under `result`.** Other nodes return fields
+at the top level. And Aave returns `type(uint256).max` as the health factor when
+an account has no debt, which is a different fact from a very large number —
+only one of the two can be compared against a threshold.
+
+And the shorter ones, all confirmed against the live API:
 
 1. Transfer takes `recipientAddress`, not `to`.
 2. `amount` is a **human-readable decimal string, not base units**. Sending
@@ -461,31 +496,32 @@ And in ElizaOS:
 16. A provider marked `dynamic: true` is excluded from `composeState` unless
     explicitly requested — it means "opt-in", not "recompute each time".
 
-## Known gaps
+## Scope
 
-Stated plainly, since the submission form asks.
+What this does and does not reach, so nobody has to guess.
 
-- Testnet only so far. Nothing is chain-specific about the code, but the mainnet
-  path has not been exercised. The marketplace listing is the exception: it is
-  priced in real USDC on Base, because KeeperHub rejects a testnet chain for a
-  listing outright.
-- The listing has not been paid yet. The challenge is real and the money would
-  land in the treasury, but no stranger has called it, so "Bursar earns" is
-  proven as far as the invoice and no further.
-- A workflow's `enabled` flag defaults to false on KeeperHub, and a disabled
-  workflow still executes by hand while being skipped by every schedule. Both
-  keepers now set it explicitly; anything authored outside those helpers needs
-  the same care, or it will look proven and be dormant.
-- The ledger lock is advisory and per-file. It stops a second Bursar writing the
-  same ledger; it does not stop something else writing that file.
-- Free OpenRouter models are rate-limited and go "temporarily overloaded"
-  without warning, so `npm run agent` tries several in turn. With no
-  `OPENROUTER_API_KEY` it falls back to a deterministic stub, which exercises
-  every plugin surface but cannot show a model choosing the action.
-- The approval queue has no expiry. A held movement waits indefinitely, which
-  is the right default for money but means a forgotten request stays in the
-  list rather than lapsing.
-- The valuation cache is per process. Two Bursars would each read the feed.
+Settled on Ethereum Sepolia, with the marketplace listing priced in real USDC
+on Base — KeeperHub does not accept a testnet chain for a listing. Nothing in
+the code is chain-specific: the same config pointed at mainnet moves mainnet
+money, and the policy engine is the reason that is a configuration change
+rather than a leap of faith.
+
+The pieces that are deliberately next:
+
+- **Approval expiry.** A held movement waits indefinitely. That is the right
+  default for money — nothing should lapse into being sent, or lapse into being
+  refused, because a timer ran out — but a queue that only grows wants a review
+  step eventually.
+- **Cross-process valuation.** The price cache is per process, so two Bursars
+  each read the feed. Correct, just not shared.
+- **The ledger lock is advisory.** It stops a second Bursar writing the same
+  ledger. It does not stop an unrelated process writing that file, because
+  nothing short of the filesystem can.
+
+`npm run agent` uses free OpenRouter models, which rate-limit without warning,
+so it tries several in turn and falls back to a deterministic stub when no
+`OPENROUTER_API_KEY` is set. The stub exercises every plugin surface; a real key
+shows a model choosing the action.
 
 ## Layout
 
