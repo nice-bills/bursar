@@ -513,7 +513,7 @@
 
     <section id="movements">
       <span class="label">Schedule of movements · Settled on Sepolia</span>
-      <h2>Five legs, each one <em>a transaction</em></h2>
+      <h2>Every leg, each one <em>a transaction</em></h2>
       <p class="lede">
         Every leg runs through one executor, so all of them inherit the same policy, the same
         intent ledger, and the same idempotency key. A sixth would inherit it too, and could not
@@ -557,9 +557,67 @@
         </article>
 
         <article class="entry fade">
-          <div class="entry-head"><span class="idx">06</span><h3>Statement</h3></div>
+          <div class="entry-head"><span class="idx">06</span><h3>Withdraw</h3></div>
+          <p class="sub">Aave v3 → treasury</p>
+          <p>The return leg. Yield that cannot come back is not yield, it is money out of reach.</p>
+          <a class="hash" href="https://sepolia.etherscan.io/tx/0xd96c8ee7187ddf833f6acb13f32e23fd92d09c6c5469a9e5c12c9b13590656fb">0xd96c8ee7 ↗</a>
+        </article>
+
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">07</span><h3>Earn</h3></div>
+          <p class="sub">Marketplace → treasury</p>
+          <p>A priced listing on KeeperHub answers callers with an x402 invoice for $0.01 USDC on Base, payable to the treasury.</p>
+          <a class="hash" href="https://app.keeperhub.com/workflows/y2if3cv7fi1lon9pgrwc4">bursar-payout-preflight ↗</a>
+        </article>
+
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">08</span><h3>Statement</h3></div>
           <p class="sub">Ledger → answer</p>
           <p>Where did the money go, answered from the ledger with a transaction hash against every line.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="protocol">
+      <span class="label">Detail 0 · The live protocol</span>
+      <h2>Aave decides, <em>not just receives</em></h2>
+      <p class="lede">
+        Supplying to a lending pool proves a transaction landed. It does not prove the position
+        exists, that it earns, or that the money can come back. So the protocol's own state is
+        read through KeeperHub, and that state governs what happens next.
+      </p>
+
+      <div class="schedule">
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">→</span><h3>It earns, and we can prove it</h3></div>
+          <p class="sub">Three reads, minutes apart</p>
+          <p>
+            <span class="fig">5.165120</span> → <span class="fig">5.165395</span> →
+            <span class="fig">5.165400</span> LINK. The figure is principal plus accrued
+            interest, so it climbs while you watch — <span class="fig">0.1654</span> LINK earned
+            against 5 supplied.
+          </p>
+        </article>
+
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">→</span><h3>Its rate gates our spending</h3></div>
+          <p class="sub">Read immediately before depositing</p>
+          <p>
+            Supplying into a collapsed rate spends real gas to earn nothing, and the rate is
+            knowable beforehand. The read fails closed: not knowing what Aave pays is not the
+            same as Aave paying enough.
+          </p>
+        </article>
+
+        <article class="entry fade">
+          <div class="entry-head"><span class="idx">→</span><h3>It triggers the movement</h3></div>
+          <p class="sub">On KeeperHub's schedule, agent absent</p>
+          <p>
+            A keeper reads Aave's supply rate and pulls the position out if the protocol stops
+            paying. Floor at <span class="fig">1%</span> and the gate held. Floor at
+            <span class="fig">300%</span>, above the live rate, and it withdrew on its own.
+          </p>
+          <a class="hash" href="https://sepolia.etherscan.io/tx/0x10f52eadf477d85a439a9a7b3ce75c8aa55cec42aaad6a0b113236d8a236ee20">0x10f52ead ↗</a>
         </article>
       </div>
     </section>

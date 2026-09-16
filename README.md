@@ -11,9 +11,92 @@ is done today by a human with a block explorer open.
 list and the agent gains a policy-bounded set of money movements, each one
 executed and audited through KeeperHub.
 
-Built for the KeeperHub Agent Economy Hackathon. Integration target: **ElizaOS**.
+Built for the KeeperHub Agent Economy Hackathon.
+
+**Live project: [Aave v3](https://aave.com).** KeeperHub is the execution layer
+between the treasury and the protocol — and the wiring runs both ways. Aave's
+own contract state decides whether value moves, a KeeperHub schedule acts on
+that state while the agent is down, and every leg has a receipt. Details and
+raw output in [`evidence/aave-v3.md`](./evidence/aave-v3.md).
+
+**Bursar also earns.** It publishes a
+[payout preflight](https://app.keeperhub.com/workflows/y2if3cv7fi1lon9pgrwc4) to
+KeeperHub's marketplace at $0.01 USDC per call, so the revenue it splits is
+revenue it made.
+
+The agent surface is **ElizaOS**: mount the plugin in a character's plugin list
+and the agent gains the treasury.
 
 ## Proof it works
+
+### Aave v3 is read, not just written
+
+Supplying to a lending pool proves a transaction landed. It does not prove the
+position exists, that it earns, or that the money can come back. So Aave's own
+state is read through KeeperHub and that state governs what happens next.
+
+Three reads of `currentATokenBalance` minutes apart, against 5 LINK supplied:
+
+| Read | aToken balance | Collateral |
+| --- | --- | --- |
+| first | 5.165120505432263390 | $154.95 |
+| second | 5.165395463617371347 | $154.96 |
+| third | 5.165400046253789813 | $154.96 |
+
+The balance rises because that figure is principal plus accrued interest —
+**0.1654 LINK earned**, read from the protocol rather than assumed.
+
+Aave's live supply rate is read immediately before depositing and gates the
+deposit. Supplying into a collapsed rate spends real gas to earn nothing, and
+the rate is knowable beforehand. The read **fails closed**: not knowing what
+Aave pays is not the same as Aave paying enough.
+
+The money comes back out, so yield is not a one-way door:
+
+| Step | aToken balance |
+| --- | --- |
+| before | 5.165400046253789813 |
+| after withdrawing 0.1 | 5.065413794163045197 |
+| after withdrawing the accrued yield | 5.000445359287327522 |
+
+Principal intact, yield harvested —
+[`0xd96c8ee7…`](https://sepolia.etherscan.io/tx/0xd96c8ee7187ddf833f6acb13f32e23fd92d09c6c5469a9e5c12c9b13590656fb)
+
+### Aave triggers the movement, not us
+
+The rate keeper runs on KeeperHub's schedule, reads Aave's supply rate, and
+pulls the position out if the protocol stops paying enough. The agent can be
+down and the treasury still reacts — the only condition under which reacting
+matters, because a rate collapse does not wait for the agent to come back up.
+
+Both branches, against the live rate:
+
+| Floor | Aave's live rate | Gate | Result |
+| --- | --- | --- | --- |
+| 1.00% | 234.37% | `{"condition":false}` | nothing moved |
+| 300.00% | 234.37% | fired | withdrew, [`0x10f52ead…`](https://sepolia.etherscan.io/tx/0x10f52eadf477d85a439a9a7b3ce75c8aa55cec42aaad6a0b113236d8a236ee20) |
+
+### Bursar sells a service and is paid for it
+
+The listing is public, priced, and answers with a real x402 challenge:
+
+```
+402 Payment Required
+  amount  10000            (USDC, 6dp — $0.01)
+  asset   0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913   (USDC on Base)
+  network eip155:8453
+  payTo   0x8d9abc5b07917229159886be02e5eed1dc7fbdc9   (the treasury)
+```
+
+It sells a payout preflight: an agent about to send a payment asks whether doing
+so would leave it below the gas it needs to keep operating. Agents strand
+themselves this way routinely — after the payment, when the money is already
+gone. Reading your own balance is easy; remembering to do it before every spend
+is what nobody does.
+
+`npm run listing -- --verify` reproduces the challenge.
+
+### The money loop, end to end
 
 Real transactions on Ethereum Sepolia, executed by the plugin's
 `PAY_CONTRIBUTORS` action distributing revenue 60/40 to the configured
@@ -188,6 +271,10 @@ configured shares, within caps it cannot raise.
 | Audit trail | Execution ids and transaction hashes recorded per movement |
 | MCP server | `list_action_schemas` for authoritative action schemas, `get_spending_limits` to read the org's enforced daily budget |
 | Private routing | Payouts prefer chains with MEV-protected submission |
+| Protocol reads | `aave-v3/get-user-account-data` and `aave-v3/get-user-reserve-data` — health factor, position, and the live supply rate that gates deployment |
+| Protocol writes | `aave-v3/supply` and `aave-v3/withdraw`, so yield is a round trip rather than a one-way door |
+| Conditional keepers | A scheduled workflow reads Aave's rate and branches, withdrawing only on the `true` handle |
+| Marketplace | `list_workflow` + `update_workflow_listing` publish a priced service; `call_workflow` returns its x402 challenge |
 
 The float is a self-contained keeper on KeeperHub's schedule, because **an
 agent that has crashed cannot notice it has run out of gas.** It reads the
@@ -201,7 +288,9 @@ agent process involved:
 | --- | --- |
 | **Payout** — split revenue to contributors by share | Working, onchain |
 | **Sweep** — consolidate earnings into the treasury | Working, onchain |
-| **Yield** — surplus above the buffer into Aave v3 | Working, onchain |
+| **Yield** — surplus above the buffer into Aave v3 | Working, onchain; gated on Aave's live supply rate |
+| **Withdraw** — pull the position back when it is needed | Working, onchain |
+| **Earn** — a priced listing on KeeperHub's marketplace | Live, returns a real x402 challenge |
 | **Float** — keep the operating wallet in gas | Working; a keeper that runs on KeeperHub without the agent |
 | **Report** — statement with a hash per line | Working |
 
@@ -377,7 +466,16 @@ And in ElizaOS:
 Stated plainly, since the submission form asks.
 
 - Testnet only so far. Nothing is chain-specific about the code, but the mainnet
-  path has not been exercised.
+  path has not been exercised. The marketplace listing is the exception: it is
+  priced in real USDC on Base, because KeeperHub rejects a testnet chain for a
+  listing outright.
+- The listing has not been paid yet. The challenge is real and the money would
+  land in the treasury, but no stranger has called it, so "Bursar earns" is
+  proven as far as the invoice and no further.
+- A workflow's `enabled` flag defaults to false on KeeperHub, and a disabled
+  workflow still executes by hand while being skipped by every schedule. Both
+  keepers now set it explicitly; anything authored outside those helpers needs
+  the same care, or it will look proven and be dormant.
 - The ledger lock is advisory and per-file. It stops a second Bursar writing the
   same ledger; it does not stop something else writing that file.
 - Free OpenRouter models are rate-limited and go "temporarily overloaded"
