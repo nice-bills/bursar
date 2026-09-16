@@ -137,7 +137,7 @@ const Schematic: React.FC = () => {
       {flow(P.gateToPayout, 300, 1)}
       {flow(P.gateToKeeper, 310, 1)}
       {flow(P.gateToYield, 320, 1)}
-      {flow(P.yieldToTreasury, 1400, 1)}
+      {flow(P.yieldToTreasury, 1760, 1)}
 
       <Node x={280} y={330} w={280} h={180} title="EARNINGS" sub="X402 · MPP" sub2="FEES" delay={10} />
       <Node x={800} y={400} w={420} h={200} title="TREASURY" sub="ORG SIGNER · TURNKEY" sub2="0X8D9ABC…FBDC9" delay={60} />
@@ -160,7 +160,7 @@ const Schematic: React.FC = () => {
       <Token d={P.gateToKeeper} start={1320} dur={40} />
       <Token d={P.gateToYield} start={1345} dur={48} />
       {/* Aave hands it back, with interest. */}
-      <Token d={P.yieldToTreasury} start={1430} dur={56} label="+0.1654" />
+      <Token d={P.yieldToTreasury} start={1800} dur={104} label="+0.1654" />
     </svg>
   );
 };
@@ -269,8 +269,8 @@ export const Demo: React.FC = () => {
     { at: 1480, x: 1150, y: 830, scale: 0.9 },
     { at: 1700, x: 1100, y: 760, scale: 0.88 },
     /* Back up the return leg to the treasury the money lands in. */
-    { at: 1900, x: 700, y: 430, scale: 1.0 },
-    { at: 2080, x: 700, y: 430, scale: 1.0 },
+    { at: 1900, x: 700, y: 360, scale: 1.0 },
+    { at: 2080, x: 700, y: 360, scale: 1.0 },
     /* Out, for the tally. */
     { at: 2260, x: 430, y: 300, scale: 0.7 },
     { at: 2430, x: 430, y: 300, scale: 0.68 },
