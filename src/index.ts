@@ -80,3 +80,45 @@ export {
  */
 export { createStandaloneRuntime, userMessage, emptyState } from "./eliza/standalone.js";
 export { stubModelPlugin, embeddingStubPlugin } from "./eliza/stub-model.js";
+
+/**
+ * The Aave v3 integration, exported because it is useful on its own.
+ *
+ * An adopter running a different treasury still benefits from reading a
+ * position rather than assuming it, and from a keeper that reacts to the
+ * protocol's rate while their agent is down.
+ */
+export {
+  readAccountData,
+  readReserveData,
+  shouldDeploy,
+  accruedInterest,
+  rayToBps,
+  formatApy,
+  formatHealthFactor,
+  aaveAccountDataWorkflow,
+  aaveReserveDataWorkflow,
+  aaveWithdrawWorkflow,
+  aaveRateKeeperWorkflow,
+  type AaveAccountData,
+  type AaveReserveData,
+  type YieldDecision,
+} from "./yield/aave.js";
+
+/**
+ * The marketplace side: publishing a priced service and reading what a paid
+ * listing demands before it will do the work.
+ */
+export {
+  PREFLIGHT_SLUG,
+  PREFLIGHT_INPUT_SCHEMA,
+  payoutPreflightWorkflow,
+  readPreflight,
+  type PreflightVerdict,
+} from "./marketplace/preflight.js";
+export {
+  readPaymentChallenge,
+  parseEmbeddedJson,
+  type PaymentChallenge,
+  type ToolOutcome,
+} from "./keeperhub/mcp.js";
