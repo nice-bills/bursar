@@ -24,6 +24,14 @@ raw output in [`evidence/aave-v3.md`](./evidence/aave-v3.md).
 KeeperHub's marketplace at $0.01 USDC per call, so the revenue it splits is
 revenue it made.
 
+**And it buys.** [KeeperHub issue #2329](https://github.com/KeeperHub/keeperhub/issues/2329)
+asks for a connector that can discover and call a Lucid Agents entrypoint, free
+or x402-priced, protecting the money with a low-balance payer key and a per-call
+`maxPriceUsd`. Bursar ships that connector with the decision handed to its policy
+engine instead — because a price cap cannot ask who is being paid, how much has
+gone out today, what it is worth across assets, or what is known if the process
+dies mid-payment. Details in [`evidence/lucid-agents.md`](./evidence/lucid-agents.md).
+
 The agent surface is **ElizaOS**: mount the plugin in a character's plugin list
 and the agent gains the treasury.
 
@@ -95,6 +103,35 @@ gone. Reading your own balance is easy; remembering to do it before every spend
 is what nobody does.
 
 `npm run listing -- --verify` reproduces the challenge.
+
+### It pays other agents, under policy
+
+Run against a real Lucid Agent built from Daydreams' own SDK
+([`examples/lucid-agent`](./examples/lucid-agent)), serving the two surfaces the
+issue names. The same invoice, four ways:
+
+| Situation | Bursar |
+| --- | --- |
+| Asset has no configured limits | refuses — "refusing to pay in an asset with no limits" |
+| Price feed is 18 hours stale | refuses — "refusing to value a movement against a stale price" |
+| Everything clears | pays — `within policy — 0.01 USDC` |
+| Above the approval threshold | holds for a person |
+
+Only the first is a question `maxPriceUsd` can ask.
+
+Pointing it at a running agent also corrected three things the specification
+does not mention, each of which fails in the same direction — reading a paid
+entrypoint as free. A served card keys `entrypoints` by name while *also*
+publishing an A2A `skills` array without pricing; the asset a price is
+denominated in appears once at the top of the card, never on the entrypoint;
+and the x402 challenge is not in the 402 body at all, but base64-encoded in a
+`payment-required` header, where KeeperHub's own marketplace puts it in the
+body.
+
+```bash
+cd examples/lucid-agent && npm install && npm start
+npm run lucid
+```
 
 ### The money loop, end to end
 
@@ -275,6 +312,7 @@ configured shares, within caps it cannot raise.
 | Protocol writes | `aave-v3/supply` and `aave-v3/withdraw`, so yield is a round trip rather than a one-way door |
 | Conditional keepers | A scheduled workflow reads Aave's rate and branches, withdrawing only on the `true` handle |
 | Marketplace | `list_workflow` + `update_workflow_listing` publish a priced service; `call_workflow` returns its x402 challenge |
+| Agent-to-agent | A Lucid Agents connector — `/.well-known/agent-card.json` discovery, `/entrypoints/{key}/invoke`, and x402 invoices gated by the policy engine |
 
 The float is a self-contained keeper on KeeperHub's schedule, because **an
 agent that has crashed cannot notice it has run out of gas.** It reads the
@@ -291,6 +329,7 @@ agent process involved:
 | **Yield** — surplus above the buffer into Aave v3 | Working, onchain; gated on Aave's live supply rate |
 | **Withdraw** — pull the position back when it is needed | Working, onchain |
 | **Earn** — a priced listing on KeeperHub's marketplace | Live, returns a real x402 challenge |
+| **Buy** — pay another agent's x402 invoice | Working against a live Lucid Agent, gated by policy |
 | **Float** — keep the operating wallet in gas | Working; a keeper that runs on KeeperHub without the agent |
 | **Report** — statement with a hash per line | Working |
 
