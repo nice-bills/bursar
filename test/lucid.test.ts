@@ -10,6 +10,13 @@ import { PolicyEngine } from "../src/policy/engine.js";
 import { readAgentCard, LucidAgent, decodeChallengeHeader } from "../src/lucid/client.js";
 import { planPayment, chainIdFromNetwork } from "../src/lucid/pay.js";
 import { readPaymentChallenge, type PaymentChallenge } from "../src/keeperhub/mcp.js";
+import {
+  settle,
+  createPayingFetch,
+  payerAddress,
+  payerConfigured,
+  SettlementError,
+} from "../src/lucid/settle.js";
 
 const USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 const ORACLE = "0x069C76420DD98cAfa97cc1D349BC1cC708284032";
@@ -486,5 +493,100 @@ describe("a challenge carried in the headers", () => {
   test("no payment header yields nothing rather than throwing", () => {
     assert.equal(decodeChallengeHeader(new Headers()), null);
     assert.equal(decodeChallengeHeader(new Headers({ "payment-required": "@@@" })), null);
+  });
+});
+
+describe("settlement only ever follows approval", () => {
+  test("refuses to pay a plan the engine did not approve", async () => {
+    // The one ordering that must never reverse. `@x402/fetch` offers a fetch
+    // that pays any 402 it meets, which would route money around the engine
+    // rather than through it — so settlement asserts the decision was made.
+    const ledger = new Ledger("/tmp/unused-bursar-ledger.jsonl");
+    for (const outcome of ["refuse", "hold"] as const) {
+      await assert.rejects(
+        () =>
+          settle(
+            { outcome, reason: "nope", intentId: "x", chainId: 84532, amount: "1",
+              payTo: ORACLE, asset: USDC },
+            { url: "http://agent.test/entrypoints/x/invoke", input: {} },
+            ledger,
+          ),
+        SettlementError,
+        `should refuse to settle a ${outcome} plan`,
+      );
+    }
+  });
+
+  test("refuses an approved plan that is missing its details", async () => {
+    const ledger = new Ledger("/tmp/unused-bursar-ledger.jsonl");
+    await assert.rejects(
+      () =>
+        settle(
+          { outcome: "pay", reason: "ok" },
+          { url: "http://agent.test/entrypoints/x/invoke", input: {} },
+          ledger,
+        ),
+      SettlementError,
+    );
+  });
+
+  test("will not sign on a chain it has no signer for", () => {
+    // A payer that signs on any chain the counterparty names is a payer the
+    // counterparty can redirect.
+    assert.throws(
+      () => createPayingFetch(1, { BURSAR_PAYER_PRIVATE_KEY: `0x${"1".repeat(64)}` } as never),
+      SettlementError,
+    );
+  });
+
+  test("reports a malformed key without printing it", () => {
+    const env = { BURSAR_PAYER_PRIVATE_KEY: "obviously-not-a-key" } as never;
+    assert.equal(payerAddress(env), null);
+    try {
+      createPayingFetch(84532, env);
+      assert.fail("should have refused");
+    } catch (error) {
+      const message = (error as Error).message;
+      assert.match(message, /not a 32-byte hex key/);
+      assert.ok(
+        !message.includes("obviously-not-a-key"),
+        "the key must never appear in an error message",
+      );
+    }
+  });
+
+  test("derives the payer address without exposing the key", () => {
+    const env = { BURSAR_PAYER_PRIVATE_KEY: `0x${"1".repeat(64)}` } as never;
+    const address = payerAddress(env);
+    assert.match(address ?? "", /^0x[a-fA-F0-9]{40}$/);
+    assert.equal(payerConfigured(env), true);
+    assert.equal(payerConfigured({} as never), false);
+  });
+});
+
+describe("a payment that was never attempted is never recorded", () => {
+  test("no key means no ledger entry at all", async () => {
+    // Recording an intent for a payment that could not even be signed leaves a
+    // phantom open movement, and reconcile would go looking for it on a chain
+    // where it cannot possibly appear.
+    const dir = await mkdtemp(join(tmpdir(), "bursar-settle-"));
+    try {
+      const path = join(dir, "ledger.jsonl");
+      const ledger = new Ledger(path);
+      await assert.rejects(
+        () =>
+          settle(
+            { outcome: "pay", reason: "ok", intentId: "i", chainId: 84532, amount: "10000",
+              payTo: ORACLE, asset: USDC, decimals: 6 },
+            { url: "http://agent.test/entrypoints/x/invoke", input: {} },
+            ledger,
+            {} as never,
+          ),
+        SettlementError,
+      );
+      assert.equal((await ledger.all()).length, 0, "nothing should have been written");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

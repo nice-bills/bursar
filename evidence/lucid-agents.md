@@ -85,12 +85,46 @@ cannot be measured.
 
 The bug predates this work and would have shipped.
 
+## Settling, not just deciding
+
+Deciding to pay and paying are different claims, so the connector does both.
+`npm run lucid -- --settle` signs the x402 challenge and retries the call.
+
+The ordering is the part worth reading. `@x402/fetch` offers a wrapped fetch
+that pays any 402 it meets and retries — the obvious way to build this, and the
+wrong one, because a fetch that pays automatically has no opinion about who it
+is paying or how much has gone out today. Wiring it in would route money around
+the policy engine rather than through it.
+
+So the paying fetch is never used for the first call:
+
+1. call the entrypoint with an ordinary fetch, and get the 402
+2. hand the challenge to the policy engine
+3. only if it approves, build the signer
+4. only then record the intent, and retry with payment
+
+Step 3 comes before step 4 deliberately. A key that is missing, or a chain this
+payer has no signer for, must fail before anything is written down — a recorded
+intent for a payment that was never attempted is a phantom, and reconcile would
+go looking for it on a chain where it cannot possibly appear.
+
+`settle()` refuses outright if handed a plan the engine did not approve. That
+assertion is tested, because it is the one ordering that must never reverse.
+
+The payer key is read from `BURSAR_PAYER_PRIVATE_KEY`, never logged, never
+returned, and never written to the ledger — a malformed key is reported by
+length, not by value, and that too is tested. It is a testnet payer by design:
+cents, on test chains. Production signing belongs with a custodian, which is
+what KeeperHub's Turnkey signer is and how every other movement in this project
+is signed.
+
 ## Reproducing
 
 ```bash
 cd examples/lucid-agent && npm install && npm start   # the counterparty
 npm run lucid                                         # the connector
 npm run lucid -- --max-price-age 172800               # past a stale testnet feed
+npm run lucid -- --max-price-age 172800 --settle      # and actually pay it
 ```
 
 The default run refuses on the stale Base Sepolia feed, which is the policy

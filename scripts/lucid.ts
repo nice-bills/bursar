@@ -27,6 +27,7 @@ import { KeeperHubClient } from "../src/keeperhub/client.js";
 import { KeeperHubMcp } from "../src/keeperhub/mcp.js";
 import { LucidAgent, LucidError } from "../src/lucid/client.js";
 import { planPayment } from "../src/lucid/pay.js";
+import { settle, payerConfigured, payerAddress, SettlementError } from "../src/lucid/settle.js";
 
 /**
  * Relax the price-staleness bound for this run only.
@@ -39,6 +40,9 @@ import { planPayment } from "../src/lucid/pay.js";
  */
 const ageIndex = process.argv.indexOf("--max-price-age");
 const MAX_PRICE_AGE = ageIndex >= 0 ? Number(process.argv[ageIndex + 1]) : undefined;
+
+/** Actually pay, rather than stopping at the decision. */
+const SETTLE = process.argv.includes("--settle");
 
 const urlIndex = process.argv.indexOf("--url");
 const AGENT_URL =
@@ -138,19 +142,58 @@ async function main(): Promise<void> {
   if (plan.priced) console.log(`     price  : ${plan.priced}`);
   if (plan.intentId) console.log(`     intent : ${plan.intentId}`);
 
-  console.log(
-    plan.outcome === "pay"
-      ? "\n   Policy cleared it. Settlement would sign the x402 challenge and retry\n" +
-          "   the call with the signature, recording the intent first."
-      : plan.outcome === "hold"
+  if (plan.outcome !== "pay") {
+    console.log(
+      plan.outcome === "hold"
         ? "\n   Held for a person. Nothing has been sent and nothing will be\n" +
             "   without a decision — the queue is in `npm run demo`'s pending list."
         : "\n   Refused. The agent does not get to talk the treasury past this.",
+    );
+    return;
+  }
+
+  if (!SETTLE) {
+    console.log(
+      "\n   Policy cleared it. Re-run with --settle to sign the challenge and pay.\n" +
+        (payerConfigured()
+          ? `   Payer: ${payerAddress()}`
+          : "   (set BURSAR_PAYER_PRIVATE_KEY first — a testnet key, funded with\n" +
+            "    Base Sepolia USDC and a little ETH for gas)"),
+    );
+    return;
+  }
+
+  // 5 ─ settlement, which only ever runs on a plan the engine approved
+  rule("5. SETTLE — signing the challenge and retrying");
+  console.log(`   payer: ${payerAddress() ?? "(none)"}`);
+
+  const result = await settle(
+    plan,
+    {
+      url: `${AGENT_URL.replace(/\/+$/, "")}/entrypoints/${paid.key}/invoke`,
+      input: { address: "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9" },
+    },
+    ledger,
   );
+
+  if (result.paid) {
+    console.log(`   ✓ paid — the agent answered:`);
+    console.log(`     ${JSON.stringify(result.output)}`);
+    if (result.receipt) console.log(`     receipt: ${result.receipt.slice(0, 120)}`);
+    console.log(`\n   Recorded as a purchase against the day's caps.`);
+  } else {
+    console.log(`   ✗ not paid — ${result.error}`);
+    console.log(
+      `\n   The intent stays open rather than being closed, because we cannot\n` +
+        `   tell from here whether the payment landed. That is what reconcile is for.`,
+    );
+  }
 }
 
 main().catch((error: unknown) => {
-  if (error instanceof LucidError) {
+  if (error instanceof SettlementError) {
+    console.error(`\n✗ ${error.message}`);
+  } else if (error instanceof LucidError) {
     console.error(`\n✗ ${error.message}`);
     if (error.body) console.error(`  ${JSON.stringify(error.body).slice(0, 400)}`);
     console.error(
