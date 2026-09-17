@@ -62,7 +62,7 @@ export const INPUT_REF = (field: string): string => `{{@trigger-1:Manual.${field
  */
 export const PREFLIGHT_INPUT_SCHEMA = {
   type: "object",
-  required: ["payer", "amountWei"],
+  required: ["payer", "amountWei", "gasReserveWei"],
   properties: {
     payer: {
       type: "string",
@@ -78,13 +78,21 @@ export const PREFLIGHT_INPUT_SCHEMA = {
       type: "string",
       description:
         "Native balance the agent must keep to stay operational, in wei. " +
-        "Defaults to 0.002 ETH — roughly a day of routine transactions.",
+        "0.002 ETH — roughly a day of routine transactions — is a sensible value " +
+        "if you have no figure of your own.",
       pattern: "^[0-9]+$",
     },
   },
 } as const;
 
-/** 0.002 ETH. Enough for a day of ordinary transactions on an L2. */
+/**
+ * 0.002 ETH. Enough for a day of ordinary transactions on an L2.
+ *
+ * Offered to callers as a suggestion, not applied as a default: the gate is a
+ * platform-evaluated expression referencing `gasReserveWei` directly, so an
+ * omitted value leaves an unresolved template reference rather than falling
+ * back to anything. The input is required for that reason.
+ */
 export const DEFAULT_GAS_RESERVE_WEI = "2000000000000000";
 
 /**

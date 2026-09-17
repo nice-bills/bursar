@@ -358,7 +358,7 @@ export const sweepEarningsAction: Action = {
 
     await respond(callback, text);
     return {
-      success: reports.every((r) => r.balance !== null),
+      success: reports.every((r) => movementSucceeded(r.note, r.balance)),
       text,
       data: { reports },
     };
@@ -411,7 +411,7 @@ export const deployYieldAction: Action = {
 
     const text = `Surplus deployment — ${report.symbol}: ${report.note}`;
     await respond(callback, text);
-    return { success: report.balance !== null, text, data: { report } };
+    return { success: movementSucceeded(report.note, report.balance), text, data: { report } };
   },
 
   examples: [
@@ -467,16 +467,41 @@ export const pendingApprovalsAction: Action = {
     const declining = /\b(decline|reject|deny|cancel|no)\b/.test(said);
 
     // Only act on a decision that names its target. "Approve it" with three
-    // held payments is not an instruction, it is an ambiguity.
+    // held payments is not an instruction, it is an ambiguity — and with one
+    // held payment it is still not one, because "yes" in an unrelated sentence
+    // would release it. The eight characters are the whole point: they prove
+    // the decision is about this movement.
     const named = held.find((e) => said.includes(e.intentId.slice(-8).toLowerCase()));
 
-    if ((approving || declining) && !named && held.length === 1) {
-      // One candidate and a clear verb is unambiguous enough to act on.
-      const only = held[0]!;
-      return decide(service, only, approving, runtime, callback);
+    // "no, do not approve that" matches both verbs. Both matching means the
+    // sentence has not decided anything, and approving was winning by order.
+    if (approving && declining) {
+      const text =
+        `That reads as both an approval and a refusal, so I did nothing. ` +
+        `Say "approve ${held[0]!.intentId.slice(-8)}" or "decline ${held[0]!.intentId.slice(-8)}".`;
+      await respond(callback, text);
+      return { success: false, text, error: "ambiguous decision" };
     }
 
     if ((approving || declining) && named) {
+      // An approval is an act with an author. Without a configured approver
+      // anyone in the room can release a payment by typing a word, which is not
+      // a human-in-the-loop control — it is the absence of one.
+      const approver = runtime.getSetting("BURSAR_APPROVER");
+      if (!approver) {
+        const text =
+          `No approver is configured, so I cannot act on that. Set BURSAR_APPROVER to the ` +
+          `id of the person allowed to release payments, then ask again.`;
+        await respond(callback, text);
+        return { success: false, text, error: "no approver configured" };
+      }
+      if (String(message.entityId ?? "") !== String(approver)) {
+        const text =
+          `Only the configured approver can release or decline a held movement, and this ` +
+          `message is not from them. ${held.length} movement(s) still waiting.`;
+        await respond(callback, text);
+        return { success: false, text, error: "not the configured approver" };
+      }
       return decide(service, named, approving, runtime, callback);
     }
 
@@ -519,6 +544,19 @@ export const pendingApprovalsAction: Action = {
   ],
 };
 
+/**
+ * Whether a movement report describes something that actually happened.
+ *
+ * `balance !== null` only says the balance was readable. A sweep the policy
+ * engine blocked, or one held for a person, has a perfectly readable balance
+ * and moved nothing — reporting that as success tells the model its instruction
+ * was carried out.
+ */
+function movementSucceeded(note: string, balance: string | null): boolean {
+  if (balance === null) return false;
+  return !/^(blocked|held|failed)\b/.test(note);
+}
+
 async function decide(
   service: BursarService,
   entry: { intentId: string; amount: string; decimals: number; to: string },
@@ -530,10 +568,12 @@ async function decide(
   const pretty = formatUnits(BigInt(entry.amount), entry.decimals);
 
   if (!approving) {
-    await service.decline(entry.intentId, who);
-    const text = `Declined ${pretty} to ${entry.to}. Nothing was sent.`;
+    const declined = await service.decline(entry.intentId, who);
+    const text = declined
+      ? `Declined ${pretty} to ${entry.to}. Nothing was sent.`
+      : `${entry.intentId.slice(-8)} was already decided, so I left it alone.`;
     await respond(callback, text);
-    return { success: true, text, data: { declined: entry.intentId } };
+    return { success: declined, text, data: { declined: entry.intentId } };
   }
 
   const outcome = await service.approve(entry.intentId, who);

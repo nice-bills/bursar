@@ -32,8 +32,27 @@ import {
 } from "../src/yield/aave.js";
 import type { WorkflowDefinition } from "../src/treasury/workflows.js";
 
+/**
+ * Validate flags before anything is authored or executed.
+ *
+ * These used to be checked deep in `main`, after two workflows had already been
+ * created and run — so a mistyped amount failed after side effects rather than
+ * at the point the operator could still fix it.
+ */
+function baseUnits(flag: string, raw: string | undefined): string {
+  if (!raw || !/^\d+$/.test(raw)) {
+    console.error(
+      `${flag} needs an amount in base units — whole digits only, no decimal point.\n` +
+        `  Got: ${raw ?? "nothing"}. For 0.1 LINK (18 decimals) that is 100000000000000000.`,
+    );
+    process.exit(1);
+  }
+  return raw;
+}
+
 const withdrawIndex = process.argv.indexOf("--withdraw");
-const WITHDRAW = withdrawIndex >= 0 ? process.argv[withdrawIndex + 1] : null;
+const WITHDRAW =
+  withdrawIndex >= 0 ? baseUnits("--withdraw", process.argv[withdrawIndex + 1]) : null;
 
 /**
  * Author the rate keeper and run it once.
@@ -44,11 +63,19 @@ const WITHDRAW = withdrawIndex >= 0 ? process.argv[withdrawIndex + 1] : null;
  */
 const keeperIndex = process.argv.indexOf("--keeper");
 const KEEPER = keeperIndex >= 0
-  ? { floorBps: process.argv[keeperIndex + 1], amount: process.argv[keeperIndex + 2] }
+  ? {
+      floorBps: baseUnits("--keeper <floorBps>", process.argv[keeperIndex + 1]),
+      amount: baseUnits("--keeper <floorBps> <amount>", process.argv[keeperIndex + 2]),
+    }
   : null;
 
-/** Floor below which supplying is not worth the gas. 0.50% APY. */
-const MIN_APY_BPS = 50n;
+/**
+ * Floor below which supplying is not worth the gas.
+ *
+ * Read from the config inside `main`, so this script gates on the same number
+ * the plugin does. A hardcoded 50 here meant the captured output demonstrated a
+ * threshold that `yield.minApyBps` was not actually set to.
+ */
 
 async function runWorkflow(
   client: KeeperHubClient,
@@ -89,6 +116,7 @@ async function main(): Promise<void> {
   }
 
   const { chainId, asset, poolAddress } = config.yield;
+  const MIN_APY_BPS = BigInt(config.yield.minApyBps ?? 0);
 
   // Every read below is scoped to a holder, so without one there is nothing to
   // ask Aave about. The address is optional in config because it can fall back
@@ -148,7 +176,12 @@ async function main(): Promise<void> {
       `  supplied  : ${formatUnits(reserve.currentATokenBalance, decimals)} ${symbol} (aToken)`,
     );
     console.log(`  debt      : ${formatUnits(reserve.currentVariableDebtTokenBalance, decimals)} ${symbol}`);
-    console.log(`  supply APY: ${formatApy(reserve.liquidityRateRay)} (${rayToBps(reserve.liquidityRateRay)} bps)`);
+    const rateRay = reserve.liquidityRateRay;
+    console.log(
+      rateRay === undefined
+        ? `  supply APR: unreadable — the gate will refuse to supply`
+        : `  supply APR: ${formatApy(rateRay)} (${rayToBps(rateRay)} bps)`,
+    );
     console.log(`  collateral: ${reserve.usageAsCollateralEnabled ? "enabled" : "disabled"}`);
 
     // Interest earned, measured against what the ledger says we put in.

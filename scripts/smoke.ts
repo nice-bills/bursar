@@ -120,8 +120,19 @@ function ok(message: string): void {
   console.log(`  ✓ ${message}`);
 }
 
+/** Keys that must never reach a terminal, a CI log, or a screen recording. */
+const SECRET_KEYS = /^(key|apiKey|api_key|secret|token|privateKey|private_key|mnemonic|seed)$/i;
+
 function detail(value: unknown): void {
-  const text = JSON.stringify(value, null, 2) ?? String(value);
+  // This prints API responses verbatim, and one of them is the org's key
+  // listing. Redacting by field name is cheap; discovering a key in a judge's
+  // screen recording is not.
+  const text =
+    JSON.stringify(
+      value,
+      (key, val: unknown) => (SECRET_KEYS.test(key) ? "[redacted]" : val),
+      2,
+    ) ?? String(value);
   const lines = text.split("\n");
   const shown = lines.slice(0, 30);
   for (const line of shown) console.log(`    ${line}`);

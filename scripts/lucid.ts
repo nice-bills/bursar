@@ -39,14 +39,43 @@ import { settle, payerConfigured, payerAddress, SettlementError } from "../src/l
  * demonstrated too, without editing the bound that protects real money.
  */
 const ageIndex = process.argv.indexOf("--max-price-age");
-const MAX_PRICE_AGE = ageIndex >= 0 ? Number(process.argv[ageIndex + 1]) : undefined;
+const MAX_PRICE_AGE = ageIndex >= 0 ? readPositiveInt("--max-price-age", process.argv[ageIndex + 1]) : undefined;
+
+/**
+ * Parse a flag that loosens a money guard, or stop.
+ *
+ * `Number(undefined)` is `NaN`, `NaN` is not nullish so it wins the `??` that
+ * falls back to the configured bound, and every `age > NaN` comparison is
+ * false — so a mistyped flag silently switched the staleness check off on a
+ * path that signs payments.
+ */
+function readPositiveInt(flag: string, raw: string | undefined): number {
+  const value = Number(raw);
+  if (raw === undefined || !Number.isInteger(value) || value <= 0) {
+    console.error(`${flag} needs a positive whole number of seconds, got ${raw ?? "nothing"}.`);
+    process.exit(1);
+  }
+  return value;
+}
 
 /** Actually pay, rather than stopping at the decision. */
 const SETTLE = process.argv.includes("--settle");
 
 const urlIndex = process.argv.indexOf("--url");
-const AGENT_URL =
-  urlIndex >= 0 ? process.argv[urlIndex + 1]! : (process.env.LUCID_AGENT_URL ?? "http://localhost:4021");
+const AGENT_URL = urlIndex >= 0 ? readUrl(process.argv[urlIndex + 1]) : (process.env.LUCID_AGENT_URL ?? "http://localhost:4021");
+
+/** `--url` with nothing after it used to sail through a `!` and fail deep inside. */
+function readUrl(raw: string | undefined): string {
+  if (!raw || !/^https?:\/\//i.test(raw)) {
+    console.error(`--url needs an http(s) URL, got ${raw ?? "nothing"}.`);
+    process.exit(1);
+  }
+  return raw;
+}
+
+/** Counterparty-supplied text, reduced to a short plain label. */
+const safeLabel = (raw: string): string =>
+  raw.replace(/[\r\n]+/g, " ").replace(/[^\w .,:@/-]/g, "").trim().slice(0, 64) || "unnamed agent";
 
 const rule = (title: string): void => {
   console.log(`\n${"─".repeat(72)}\n${title}\n${"─".repeat(72)}`);
@@ -130,11 +159,17 @@ async function main(): Promise<void> {
     client ? new Valuation(client, 60_000, maxAge) : undefined,
   );
 
+  const invokeUrl = `${AGENT_URL.replace(/\/+$/, "")}/entrypoints/${encodeURIComponent(paid.key)}/invoke`;
+
   const plan = await planPayment(outcome.challenge, {
     policy,
     ledger,
     config,
-    memo: `${paid.key} from ${card.name}`,
+    // The card is written by the counterparty. It ends up in the ledger and
+    // from there in the agent's context, so it is trimmed to something that
+    // reads as a label rather than as instructions.
+    memo: `${paid.key} from ${safeLabel(card.name)}`,
+    url: invokeUrl,
   });
 
   const mark = plan.outcome === "pay" ? "✓" : plan.outcome === "hold" ? "⏸" : "✗";
@@ -170,7 +205,7 @@ async function main(): Promise<void> {
   const result = await settle(
     plan,
     {
-      url: `${AGENT_URL.replace(/\/+$/, "")}/entrypoints/${paid.key}/invoke`,
+      url: invokeUrl,
       input: { address: "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9" },
     },
     ledger,

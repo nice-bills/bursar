@@ -92,7 +92,14 @@ describe("idempotency keys survive real-world strings", () => {
     // Regression: workflow names contain an em-dash, and header values must be
     // Latin-1, so `fetch` threw before the key was sanitised.
     const { KeeperHubClient } = await import("../src/keeperhub/client.js");
-    const client = new KeeperHubClient({ apiKey: "kh_test", baseUrl: "http://127.0.0.1:1" });
+    // maxAttempts: 1 — the assertion is about the header value, not the retry
+    // ladder. Left at the default this test spent ~7s of real backoff sleeping
+    // against a dead socket, which was 90% of the whole suite's runtime.
+    const client = new KeeperHubClient({
+      apiKey: "kh_test",
+      baseUrl: "http://127.0.0.1:1",
+      maxAttempts: 1,
+    });
 
     // The request will fail to connect; what matters is that it fails as a
     // network error rather than a ByteString conversion TypeError.

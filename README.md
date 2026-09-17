@@ -202,7 +202,8 @@ silently absent from every prompt. `dynamic` does not mean "recompute each
 time" — providers are always called fresh — it means "opt-in only".
 
 The provider then paid for itself. Asked to *"pay out 5"* — far above the
-0.02 ceiling — the model did not attempt it and get refused. It read the limits
+0.02 ceiling that run was configured with — the model did not attempt it and
+get refused. It read the limits
 out of the TREASURY provider and declined up front, quoting them back and
 offering an amount that would fit. That is the difference between an agent that
 learns its constraints from a failure and one that knows them while reasoning.
@@ -286,10 +287,10 @@ task-shaped surface. Measured with `npm run context-cost`:
 
 | | Mounting KeeperHub directly | With plugin-bursar |
 | --- | --- | --- |
-| Always in the prompt | ~13,300 tokens (44 tool definitions) | ~950 tokens (6 actions + 1 provider) |
+| Always in the prompt | ~13,300 tokens (44 tool definitions) | ~1,130 tokens (7 actions + 1 provider) |
 | One schema lookup | ~120,600 tokens | ~370 tokens |
 
-**14x smaller resident surface, 330x smaller per lookup.** The 44 tools are all
+**12x smaller resident surface, 330x smaller per lookup.** The 44 tools are all
 still reachable — Bursar calls them — they are just not in the prompt, and
 neither is the traffic between them.
 
@@ -307,7 +308,7 @@ configured shares, within caps it cannot raise.
 | Agent-authored workflows | Bursar composes and upserts a float monitor onto KeeperHub, then executes it and reads its output ([`dg9oxiktaln5qv9hl5987`](https://app.keeperhub.com/workflows/dg9oxiktaln5qv9hl5987)) |
 | Audit trail | Execution ids and transaction hashes recorded per movement |
 | MCP server | `list_action_schemas` for authoritative action schemas, `get_spending_limits` to read the org's enforced daily budget |
-| Private routing | Payouts prefer chains with MEV-protected submission |
+| Private routing | Reported per movement: whether the chain holding the money supports MEV-protected submission |
 | Protocol reads | `aave-v3/get-user-account-data` and `aave-v3/get-user-reserve-data` — health factor, position, and the live supply rate that gates deployment |
 | Protocol writes | `aave-v3/supply` and `aave-v3/withdraw`, so yield is a round trip rather than a one-way door |
 | Conditional keepers | A scheduled workflow reads Aave's rate and branches, withdrawing only on the `true` handle |
@@ -371,13 +372,20 @@ const runtime = new AgentRuntime({
 });
 ```
 
-Two environment variables, one of them optional:
+One required environment variable, the rest optional:
 
 ```bash
-KEEPERHUB_API_KEY=kh_...            # app.keeperhub.com -> API Keys
+KEEPERHUB_API_KEY=kh_...                # required — app.keeperhub.com -> API Keys
+KEEPERHUB_BASE_URL=https://api.keeperhub.com  # optional, this is the default
 BURSAR_CONFIG_PATH=bursar.config.json   # optional, this is the default
 BURSAR_LEDGER_PATH=data/ledger.jsonl    # optional, this is the default
+BURSAR_APPROVER=<entity id>             # required to release a held movement
 ```
+
+`BURSAR_APPROVER` is the id of the person allowed to approve or decline a held
+payment. Without it `REVIEW_PENDING` will list what is waiting but refuse to
+release anything — an approval gate that anyone in the room can satisfy is not
+a gate.
 
 Your agent gains seven actions — `PAY_CONTRIBUTORS`, `SWEEP_EARNINGS`,
 `DEPLOY_SURPLUS`, `CHECK_GAS_FLOAT`, `RECONCILE_TREASURY`, `REVIEW_PENDING`,
@@ -402,8 +410,9 @@ its original key, Aave answers for its own position, the listing sends an
 invoice, and the treasury pays another agent's.
 
 Every terminal panel quotes real output this repo produced.
-`video/captured-run.txt` is the session they are read from, hashes included —
-nothing in the film is typed for the camera.
+`video/captured-run.txt` collects those runs — `demo`, `aave` and `listing` —
+with hashes included; nothing in the film is typed for the camera, though the
+banners that join the runs into one reel were written for the document.
 
 `cd video && npm install && npm run render`. The fonts are committed under
 `video/public/fonts`, so a clone renders the same frames without reaching the
@@ -415,10 +424,19 @@ like a broken renderer.
 ```bash
 npm install
 cp .env.example .env                       # your kh_ key from app.keeperhub.com
-cp bursar.config.example.json bursar.config.json
+cp -n bursar.config.example.json bursar.config.json   # -n: never clobber
 npm run smoke                              # read-only: auth, wallet, chains
 npm test
 ```
+
+The repo ships a working `bursar.config.json` — the Sepolia setup every figure
+in this README was produced from — which is why the copy above uses `-n`. Read
+`bursar.config.example.json` for what each field does; it documents the policy
+block, the cross-asset USD ceiling and the yield gate in full.
+
+Both files are validated the same way: a malformed one is refused at load with
+the field named, rather than starting an agent whose limits are not what its
+operator thinks.
 
 To have a real model choose the actions, add a free
 [OpenRouter](https://openrouter.ai) key as `OPENROUTER_API_KEY`. OpenRouter
@@ -449,7 +467,8 @@ committed file contains neither.
 
 Scripts: `npm run agent` (dry) / `-- --execute`, `npm run demo` (dry) / `-- --execute`, `npm run chains`,
 `npm run workflow` (dry) / `-- --create`, `npm run smoke`,
-`npm run chaos` (dry) / `-- --execute`.
+`npm run chaos` (dry) / `-- --execute`, `npm run aave`, `npm run lucid`,
+`npm run listing`, `npm run context-cost`.
 
 `npm run chaos` induces real failures — a torn ledger line, a crash before
 submitting, a crash after submitting — and asserts the recovery. The live
@@ -578,9 +597,12 @@ shows a model choosing the action.
 src/
   index.ts              Plugin manifest
   eliza/                Service, provider, actions, standalone runtime
-  treasury/             Executor (the one path value moves through), workflows
+  treasury/             Executor (the one path value moves through), workflows, valuation
   policy/               Deny-by-default policy engine
   ledger/               Append-only intent ledger
-  keeperhub/            Typed REST client: retries, rate limits, idempotency
+  keeperhub/            Typed REST client and MCP reader: retries, rate limits, idempotency
+  yield/                Aave v3 reads, the rate gate, and the withdraw keeper
+  lucid/                Agent-to-agent: card discovery, x402 invoices, settlement
+  marketplace/          The priced payout-preflight listing Bursar sells
   units.ts              Base units <-> decimal, the one conversion boundary
 ```

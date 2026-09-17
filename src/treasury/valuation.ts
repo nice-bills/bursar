@@ -153,9 +153,14 @@ export class Valuation {
         functionArgs: "[]",
       },
       // A read changes nothing, but the client requires a key on every write
-      // verb, and the endpoint is a POST. Keyed by what is being read so a
-      // retry is answered from the same round rather than a later one.
-      `read-${chainId}-${contractAddress}-${functionName}`,
+      // verb, and the endpoint is a POST. Keyed by what is being read AND by
+      // the window it is being read in: a constant key makes every later read
+      // an idempotent replay of the very first one, so the price freezes at
+      // whatever it was the first time this process ever asked — and once that
+      // frozen round ages past maxPriceAgeSeconds, every valuation fails closed
+      // forever. The bucket keeps a retry inside one window answered from the
+      // same round, which is all the key was ever for.
+      `read-${chainId}-${contractAddress}-${functionName}-${Math.floor(Date.now() / this.cacheMs)}`,
     );
 
     const raw = result.raw as { result?: unknown } | undefined;

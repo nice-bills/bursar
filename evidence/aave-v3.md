@@ -1,8 +1,11 @@
 # Aave v3 — the live protocol, read and written
 
-Everything here was produced by running `npm run aave` against Aave v3 on
-Sepolia through KeeperHub. Nothing is reconstructed. The raw console capture is
-in [`aave-roundtrip.txt`](./aave-roundtrip.txt).
+Every figure here was produced by running `npm run aave` against Aave v3 on
+Sepolia through KeeperHub — none of them are invented or recomputed by hand.
+[`aave-roundtrip.txt`](./aave-roundtrip.txt) collects console output from more
+than one such run, under headers written for this document; it captures the
+withdrawal round trip in full, not the three earlier balance reads tabulated
+below.
 
 - Treasury: [`0x8d9abc5b07917229159886be02e5eed1dc7fbdc9`](https://sepolia.etherscan.io/address/0x8d9abc5b07917229159886be02e5eed1dc7fbdc9)
 - Aave v3 Pool: `0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951`

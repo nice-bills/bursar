@@ -4,11 +4,10 @@
   "description": "An onchain treasury for ElizaOS agents. Revenue splits, a gas keeper, and surplus into Aave, executed and audited through KeeperHub.",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.6"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx src/index.ts",
     "smoke": "tsx scripts/smoke.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "chains": "tsx scripts/chains.ts",
@@ -24,10 +23,8 @@
     "lucid": "tsx scripts/lucid.ts"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
     "@x402/evm": "^2.26.0",
     "@x402/fetch": "^2.26.0",
-    "dotenv": "^16.4.5",
     "viem": "^2.56.5",
     "zod": "^3.23.8"
   },
@@ -36,6 +33,7 @@
     "@elizaos/plugin-openrouter": "^1.5.17",
     "@elizaos/plugin-sql": "^1.7.2",
     "@types/node": "^22.0.0",
+    "dotenv": "^16.4.5",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0"
   },

@@ -10,6 +10,7 @@
  */
 
 import { assetPolicyFor, type BursarConfig } from "../config.js";
+import { NATIVE_DECIMALS } from "../units.js";
 import type { Leg, Ledger } from "../ledger/store.js";
 import { formatUsd, ValuationError, type Valuation } from "../treasury/valuation.js";
 import type { SpendingLimits } from "../keeperhub/mcp.js";
@@ -72,14 +73,17 @@ export class PolicyEngine {
     if (this.cachedLimits && now - this.cachedLimits.at < LIMITS_TTL_MS) {
       return this.cachedLimits.limits;
     }
-    let limits: SpendingLimits | null = null;
     try {
-      limits = await this.platformLimits();
+      const limits = await this.platformLimits();
+      this.cachedLimits = { at: now, limits };
+      return limits;
     } catch {
-      limits = null;
+      // Deliberately open, as documented above — but not cached. Caching the
+      // failure would extend one transient error into a TTL-long window where
+      // the platform cap is not checked at all, and the next movement deserves
+      // a fresh attempt rather than an inherited one.
+      return null;
     }
-    this.cachedLimits = { at: now, limits };
-    return limits;
   }
 
   /**
@@ -138,6 +142,17 @@ export class PolicyEngine {
     //    token with no entry cannot move: guessing is worse than refusing.
     let limits: { symbol: string; maxPerTransfer: string; maxPerDay: string };
     if (movement.token === null) {
+      // The native asset has exactly one scale. A movement declaring any other
+      // is measured against the caps in one unit and submitted in another —
+      // `decimals: 6` reads as dust here and leaves as ten ether.
+      if (movement.decimals !== NATIVE_DECIMALS) {
+        return {
+          verdict: "deny",
+          reason:
+            `native movements are denominated in wei (${NATIVE_DECIMALS} decimals) but this ` +
+            `movement declares ${movement.decimals}`,
+        };
+      }
       limits = {
         symbol: "native",
         maxPerTransfer: this.config.policy.maxPerTransfer,

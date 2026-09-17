@@ -71,6 +71,8 @@ export async function planPayment(
     config: BursarConfig;
     /** What the payment is for, recorded on the ledger line. */
     memo: string;
+    /** The entrypoint being paid, recorded so a held invoice can be found again. */
+    url?: string;
     period?: string;
   },
 ): Promise<PaymentPlan> {
@@ -173,9 +175,36 @@ export async function planPayment(
   if (decision.verdict === "deny") {
     return { outcome: "refuse", reason: decision.reason, ...common };
   }
+
+  // Evaluating the movement is what prices it, so the USD value only exists
+  // now. It has to reach the ledger or the cross-asset ceiling sums nothing for
+  // purchases, and an agent can buy its way past a limit it never touches.
+  const valued = {
+    ...common,
+    ...(movement.valueUsdCents ? { valueUsdCents: movement.valueUsdCents } : {}),
+  };
+
   if (decision.verdict === "needs_approval") {
-    return { outcome: "hold", reason: decision.reason, ...common };
+    // Write the hold down. A request that needs a person is worthless if it
+    // evaporates when the process ends, and `awaitingApproval()` is where the
+    // operator looks — returning "held" without recording it meant the queue
+    // was always empty and no held invoice could ever be approved.
+    await context.ledger.append({
+      intentId,
+      leg: "purchase",
+      chainId,
+      to: payTo,
+      amount,
+      token: asset,
+      decimals: assetPolicy.decimals,
+      ...(movement.valueUsdCents ? { valueUsdCents: movement.valueUsdCents } : {}),
+      memo: context.memo ?? `x402 invoice — ${priced}`,
+      submission: { kind: "x402" as const, url: context.url ?? "" },
+      status: "awaiting_approval",
+      heldReason: decision.reason,
+    });
+    return { outcome: "hold", reason: decision.reason, ...valued };
   }
 
-  return { outcome: "pay", reason: `within policy — ${priced}`, ...common };
+  return { outcome: "pay", reason: `within policy — ${priced}`, ...valued };
 }

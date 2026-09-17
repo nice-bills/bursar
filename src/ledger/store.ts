@@ -44,7 +44,40 @@ export type EntryStatus =
   | "approved"
   | "declined";
 
+/**
+ * How a movement was sent, recorded so it can be replayed exactly.
+ *
+ * A closure cannot survive a restart, and reconciling a movement by guessing
+ * the route is how an Aave supply becomes a raw transfer into the pool. The
+ * route is part of the movement's identity, so it lives in the ledger.
+ */
+export type SubmissionRoute =
+  | { kind: "transfer" }
+  /**
+   * Paid directly from the payer key over x402, never through KeeperHub.
+   *
+   * KeeperHub has never seen this intent id, so replaying it there would not be
+   * an idempotent no-op — it would be a second, real payment. Reconciliation
+   * reports these rather than replaying them.
+   */
+  | { kind: "x402"; url: string }
+  | {
+      kind: "workflow";
+      workflowId: string;
+      /**
+       * An ERC-20 allowance the workflow needs before it can pull the tokens.
+       *
+       * Recorded rather than granted up front: authority to spend should not
+       * exist before the policy engine has decided the spend may happen, and a
+       * movement held for a person must not leave a standing allowance sitting
+       * behind it while it waits.
+       */
+      allowance?: { chainId: number; token: string; spender: string; amount: string };
+    };
+
 export interface LedgerEntry {
+  /** How this movement reaches the chain. Absent on rows written before routes were recorded. */
+  submission?: SubmissionRoute;
   /** Deterministic id — also used as the KeeperHub idempotency key. */
   intentId: string;
   status: EntryStatus;
@@ -83,9 +116,18 @@ export interface LedgerEntry {
  *
  * A held or declined movement has not moved, so counting it against the daily
  * caps would let a pile of unapproved requests starve the ones that are
- * approved.
+ * approved. `approved` is the same: it records a person's decision, not a
+ * transfer. Counting it would make every approval collide with its own amount
+ * on the way back through the caps, and the movement it authorises is recorded
+ * separately when it actually goes out.
  */
-const NOT_SPENT = new Set<EntryStatus>(["failed", "abandoned", "awaiting_approval", "declined"]);
+const NOT_SPENT = new Set<EntryStatus>([
+  "failed",
+  "abandoned",
+  "awaiting_approval",
+  "approved",
+  "declined",
+]);
 
 /**
  * Legs that bring value in rather than send it out.

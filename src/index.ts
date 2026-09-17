@@ -58,6 +58,22 @@ export { KeeperHubClient, KeeperHubError } from "./keeperhub/client.js";
 export { loadConfig, splitByShares, type BursarConfig } from "./config.js";
 export { formatUnits, parseUnits, NATIVE_DECIMALS, UnitsError } from "./units.js";
 export { extractAmount, type AmountResult } from "./eliza/amount.js";
+export { type SubmissionRoute } from "./ledger/store.js";
+
+// The agent-to-agent leg. Exported because it is a shipped capability, not a
+// demo script: an integrator who wants their agent to discover and pay another
+// agent's priced entrypoint needs these, and without them `viem` and the x402
+// packages would be dependencies no installer could reach.
+export { LucidAgent } from "./lucid/client.js";
+export { planPayment, chainIdFromNetwork, type PaymentPlan } from "./lucid/pay.js";
+export {
+  settle,
+  payerAddress,
+  payerConfigured,
+  assertChallengeMatchesPlan,
+  SettlementError,
+  type SettlementResult,
+} from "./lucid/settle.js";
 
 // Individual actions, so an integrator can mount a subset — a read-only agent
 // that reports but never pays is a reasonable thing to want.

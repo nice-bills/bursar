@@ -134,7 +134,29 @@ async function loadCharacter(): Promise<Character> {
   return { ...raw, id: stringToUuid(raw.name) };
 }
 
+/**
+ * Stop here, not fifteen seconds deep.
+ *
+ * The service throws a good message when the key is missing, but the ElizaOS
+ * runtime registers services without awaiting them, so that message is
+ * swallowed and the failure surfaces later as an unrelated-looking assertion.
+ */
+function requireApiKey(): string {
+  const key = process.env.KEEPERHUB_API_KEY;
+  if (!key) {
+    console.error(
+      "KEEPERHUB_API_KEY is not set.\n" +
+        "  Get one at app.keeperhub.com -> avatar menu -> API Keys,\n" +
+        "  then put it in .env (see .env.example).",
+    );
+    process.exit(1);
+  }
+  return key;
+}
+
 async function main(): Promise<void> {
+  requireApiKey();
+
   const dataDir = await mkdtemp(join(tmpdir(), "bursar-agent-"));
 
   const character = await loadCharacter();

@@ -516,7 +516,7 @@
       <h2>Every leg, each one <em>a transaction</em></h2>
       <p class="lede">
         Every leg runs through one executor, so all of them inherit the same policy, the same
-        intent ledger, and the same idempotency key. A sixth would inherit it too, and could not
+        intent ledger, and the same idempotency key. Another would inherit it too, and could not
         opt out.
       </p>
 
@@ -677,12 +677,12 @@
       <span class="label">Detail 2 · Surface area</span>
       <h2>Why mount this instead of <em>the server it calls</em></h2>
       <p class="lede">
-        KeeperHub exposes 44 tools over MCP. Bursar calls them from code and puts six actions in
+        KeeperHub exposes 44 tools over MCP. Bursar calls them from code and puts seven actions in
         front of the model, so the traffic stays in the program.
       </p>
 
       <figure class="plate">
-        <svg viewBox="0 0 1180 400" class="draw" role="img" aria-label="Mounting KeeperHub directly puts 44 tool definitions in every prompt. With Bursar, six actions are in the prompt and the 44 tools sit behind it, reached from code.">
+        <svg viewBox="0 0 1180 400" class="draw" role="img" aria-label="Mounting KeeperHub directly puts 44 tool definitions in every prompt. With Bursar, seven actions are in the prompt and the 44 tools sit behind it, reached from code.">
           <defs>
             <marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
               <path d="M0 1.5 L9 5 L0 8.5" fill="none" stroke="#ef6a52" stroke-width="1.5"/>
@@ -813,7 +813,7 @@
             <text x="40" y="274" font-size="11.5" fill="#ef6a52">13,300 TOKENS IN EVERY PROMPT</text>
 
             <text x="700" y="254" font-size="11.5" fill="#a9bce0">6 TREASURY ACTIONS</text>
-            <text x="1110" y="254" font-size="11.5" fill="#ef6a52" text-anchor="end">950 TOKENS</text>
+            <text x="1110" y="254" font-size="11.5" fill="#ef6a52" text-anchor="end">1,130 TOKENS</text>
 
             <text x="700" y="386" font-size="11.5" fill="#a9bce0">THE SAME 44, REACHED FROM CODE · NONE OF THEM IN THE PROMPT</text>
           </g>
@@ -824,7 +824,7 @@
             <line x1="40" y1="303" x2="40" y2="317"/>
             <line x1="1110" y1="303" x2="1110" y2="317"/>
           </g>
-          <text x="575" y="304" text-anchor="middle" font-family="Barlow Semi Condensed, sans-serif" font-size="12" letter-spacing="1.8" fill="#ef6a52">14 : 1 RESIDENT · 330 : 1 PER SCHEMA LOOKUP</text>
+          <text x="575" y="304" text-anchor="middle" font-family="Barlow Semi Condensed, sans-serif" font-size="12" letter-spacing="1.8" fill="#ef6a52">12 : 1 RESIDENT · 330 : 1 PER SCHEMA LOOKUP</text>
 
           <text x="40" y="386" font-family="Barlow Semi Condensed, sans-serif" font-size="11" letter-spacing="1.4" fill="#a9bce0">44 EXECUTION TOOLS HAVE TO BE ASKED NOT TO SPEND · A PAYOUT ACTION CANNOT</text>
         </svg>
@@ -848,8 +848,8 @@
             <tr>
               <th scope="row">Resident in every prompt</th>
               <td>13,300 tokens</td>
-              <td>950 tokens</td>
-              <td class="ratio">14 : 1</td>
+              <td>1,130 tokens</td>
+              <td class="ratio">12 : 1</td>
             </tr>
             <tr>
               <th scope="row">One schema lookup</th>

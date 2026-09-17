@@ -279,9 +279,16 @@ async function main(): Promise<void> {
       // anywhere it cannot come back from.
       const floor = "600000000000000000"; // 0.6 ETH, above the wallet's balance
       const target = "600001000000000000"; // top-up = 0.000001
+      const base = config.float[0];
+      if (!base) {
+        // `float` defaults to an empty array, so spreading float[0] parsed
+        // `undefined` and reported a zod error as if the scenario had failed.
+        console.log("   skipped — no float target configured in bursar.config.json");
+        return;
+      }
       const raised = configSchema.parse({
         ...config,
-        float: [{ ...config.float[0], minBalance: floor, targetBalance: target }],
+        float: [{ ...base, minBalance: floor, targetBalance: target }],
       });
 
       const executor = new Executor(client, ledger, new PolicyEngine(raised, ledger), raised);

@@ -75,8 +75,14 @@ export interface AaveReserveData {
   /** Supplied balance including accrued interest — the number that grows. */
   currentATokenBalance: bigint;
   currentVariableDebtTokenBalance: bigint;
-  /** Supply rate in ray. */
-  liquidityRateRay: bigint;
+  /**
+   * Supply rate in ray, when the protocol reported one.
+   *
+   * Optional on purpose: a position can read while its rate does not, and the
+   * difference between "paying nothing" and "we could not tell" is the whole
+   * point of the gate that consumes it.
+   */
+  liquidityRateRay?: bigint;
   usageAsCollateralEnabled: boolean;
 }
 
@@ -169,12 +175,19 @@ export function readReserveData(output: unknown): AaveReserveData | null {
   const supplied = toBigInt(o.currentATokenBalance);
   if (supplied === null) return null;
 
+  // An unreadable rate is not a rate of zero. Defaulting it to 0n made a
+  // malformed response — a missing field, a hex-encoded number, an error string
+  // — look like a readable reserve paying nothing, which then sailed through a
+  // floor of 0. The rate is optional on the type for exactly this reason: the
+  // caller has to decide what to do without it, and deploying is not it.
+  const liquidityRateRay = toBigInt(o.liquidityRate);
+
   const collateralFlag = o.usageAsCollateralEnabled;
 
   return {
     currentATokenBalance: supplied,
     currentVariableDebtTokenBalance: toBigInt(o.currentVariableDebtTokenBalance) ?? 0n,
-    liquidityRateRay: toBigInt(o.liquidityRate) ?? 0n,
+    ...(liquidityRateRay === null ? {} : { liquidityRateRay }),
     usageAsCollateralEnabled: collateralFlag === true || collateralFlag === "true",
   };
 }
@@ -202,6 +215,16 @@ export function shouldDeploy(
   if (!reserve) {
     // Fail closed. Not knowing the rate is not the same as the rate being fine.
     return { deploy: false, reason: "Aave's reserve data could not be read", apyBps: 0n };
+  }
+
+  if (reserve.liquidityRateRay === undefined) {
+    // The position read, the rate did not. Same reasoning, one level down: a
+    // floor of 0 would otherwise let an unknown rate through.
+    return {
+      deploy: false,
+      reason: "Aave's supply rate could not be read from the reserve data",
+      apyBps: 0n,
+    };
   }
 
   const apyBps = rayToBps(reserve.liquidityRateRay);

@@ -29,7 +29,8 @@
     "chainId": 11155111,
     "asset": "0xf8Fb3713D459D7C1018BD0A49D19b4C44290EBE5",
     "poolAddress": "0x6Ae43d3271ff6888e7Fc43Fd7321a503ff738951",
-    "buffer": "5000000000000000000"
+    "buffer": "5000000000000000000",
+    "minApyBps": 50
   },
   "policy": {
     "maxPerTransfer": "5000000000000000",

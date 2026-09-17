@@ -270,6 +270,10 @@ export class KeeperHubClient {
     while (Date.now() < deadline) {
       last = await this.waitForExecution(executionId);
       if (isTerminal(last.status)) return last;
+      // `/wait` blocks server-side, but it is not obliged to. When it returns
+      // promptly this loop otherwise spins as fast as the rate limiter allows,
+      // burning the whole per-minute budget every other call shares.
+      await sleep(1_000);
     }
     throw new Error(
       `Execution ${executionId} did not reach a terminal state within ${deadlineMs}ms ` +
@@ -319,6 +323,25 @@ export class KeeperHubClient {
         const requestId = response.headers.get("x-request-id") ?? undefined;
         const text = await response.text();
         const parsed = text ? safeJsonParse(text) : null;
+
+        // `safeJsonParse` hands back the raw text when it cannot parse, and a
+        // string flows through `normalizeExecution` as an object with every
+        // field undefined — producing a perfectly well-formed result with an
+        // empty execution id and status "unknown". A CDN error page or a
+        // captive-portal interstitial answering 200 would be reported to the
+        // caller as a submitted movement. An unreadable body is a failure.
+        if (response.ok && text && typeof parsed === "string") {
+          const error = new KeeperHubError(
+            `KeeperHub ${method} ${path} returned ${response.status} with a body that is not ` +
+              `JSON, so whether it executed is unknown`,
+            response.status,
+            text.slice(0, 500),
+            requestId,
+          );
+          if (attempt === this.maxAttempts) throw error;
+          await sleep(backoffMs(attempt, response.headers.get("retry-after")));
+          continue;
+        }
 
         if (!response.ok) {
           const error = new KeeperHubError(
@@ -394,7 +417,10 @@ function normalizeExecution(body: unknown): ExecutionResult {
         if (typeof entry === "string") return [{ hash: entry }];
         if (entry && typeof entry === "object") {
           const record = entry as Record<string, unknown>;
-          const hash = record.hash ?? record.transactionHash;
+          // `txHash` is accepted at the top level, so it has to be accepted
+          // here too — an array of objects spelling it that way used to yield
+          // zero hashes for an execution that really did move funds.
+          const hash = record.hash ?? record.transactionHash ?? record.txHash;
           if (typeof hash === "string") {
             return [
               {
@@ -413,9 +439,15 @@ function normalizeExecution(body: unknown): ExecutionResult {
         }
         return [];
       })
-    : typeof single === "string"
-      ? [{ hash: single }]
-      : [];
+    : [];
+
+  // Fall back to the single-hash spelling whenever the array yielded nothing,
+  // not merely when the array was absent: a response carrying both an empty
+  // (or unrecognised) `transactionHashes` and a populated `transactionHash`
+  // used to report no hash at all.
+  if (transactions.length === 0 && typeof single === "string") {
+    transactions.push({ hash: single });
+  }
 
   return {
     executionId: String(
@@ -424,8 +456,18 @@ function normalizeExecution(body: unknown): ExecutionResult {
     status: String(inner.status ?? raw.status ?? "unknown"),
     transactionHashes: transactions.map((t) => t.hash),
     transactions,
+    // The same object-vs-string split as the hashes above. This path was not
+    // hardened at the time and `String({url})` produced "[object Object]",
+    // which is then printed as the explorer link in every audit surface.
     transactionLinks: Array.isArray(links)
-      ? links.map(String)
+      ? links.flatMap((entry) => {
+          if (typeof entry === "string") return [entry];
+          if (entry && typeof entry === "object") {
+            const url = (entry as Record<string, unknown>).url;
+            if (typeof url === "string") return [url];
+          }
+          return [];
+        })
       : typeof singleLink === "string"
         ? [singleLink]
         : [],

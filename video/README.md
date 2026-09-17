@@ -1,11 +1,14 @@
 # The demo video
 
-`bursar-demo.mp4` is the delivered cut — 61s, 1920x1080. It is committed rather
+`bursar-demo.mp4` is the delivered cut — 105s, 1920x1080. It is committed rather
 than left as a build artefact so the link in a submission keeps working.
 
 Rendered with [Remotion](https://remotion.dev), from output this repo actually
-produced. `captured-run.txt` is the `npm run demo -- --execute` session the
-terminal panels quote, hashes included; they resolve on Sepolia.
+produced. `captured-run.txt` collects the runs the terminal panels quote —
+`npm run demo -- --execute`, `npm run aave` and `npm run listing` — under
+hand-written banners, so it reads as one session rather than three. The figures
+and hashes in it are verbatim from those runs and resolve on Sepolia; the
+banners and the section ordering are editorial.
 
 ```bash
 npm install

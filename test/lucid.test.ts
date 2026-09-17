@@ -496,6 +496,18 @@ describe("a challenge carried in the headers", () => {
   });
 });
 
+/** A minimal approved plan, for the call sites that only exercise the signer. */
+const APPROVED_PLAN = {
+  outcome: "pay",
+  reason: "within policy",
+  amount: "10000",
+  asset: `0x${"a".repeat(40)}`,
+  payTo: `0x${"b".repeat(40)}`,
+  chainId: 84532,
+  decimals: 6,
+  intentId: "test-intent",
+} as const;
+
 describe("settlement only ever follows approval", () => {
   test("refuses to pay a plan the engine did not approve", async () => {
     // The one ordering that must never reverse. `@x402/fetch` offers a fetch
@@ -534,7 +546,10 @@ describe("settlement only ever follows approval", () => {
     // A payer that signs on any chain the counterparty names is a payer the
     // counterparty can redirect.
     assert.throws(
-      () => createPayingFetch(1, { BURSAR_PAYER_PRIVATE_KEY: `0x${"1".repeat(64)}` } as never),
+      () =>
+        createPayingFetch(1, APPROVED_PLAN, {
+          BURSAR_PAYER_PRIVATE_KEY: `0x${"1".repeat(64)}`,
+        } as never),
       SettlementError,
     );
   });
@@ -543,7 +558,7 @@ describe("settlement only ever follows approval", () => {
     const env = { BURSAR_PAYER_PRIVATE_KEY: "obviously-not-a-key" } as never;
     assert.equal(payerAddress(env), null);
     try {
-      createPayingFetch(84532, env);
+      createPayingFetch(84532, APPROVED_PLAN, env);
       assert.fail("should have refused");
     } catch (error) {
       const message = (error as Error).message;

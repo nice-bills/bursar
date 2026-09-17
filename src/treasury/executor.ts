@@ -1,18 +1,30 @@
 /**
- * The one path through which value moves.
+ * The one path through which value moves under this process's own policy.
  *
- * Every leg — sweep, payout, float, yield — funnels through `move()`, so the
- * policy check, the intent record, the idempotency key, and the reconciliation
- * hook exist exactly once. Adding a fifth leg later gets all of it for free,
- * and cannot accidentally opt out.
+ * Sweep, payout and yield funnel through `move()`, so the policy check, the
+ * intent record, the idempotency key and the reconciliation hook exist exactly
+ * once. Adding another leg of that kind gets all of it for free, and cannot
+ * accidentally opt out.
+ *
+ * Two legs reach the chain by other routes, and it is worth being precise about
+ * why rather than letting the sentence above imply otherwise:
+ *
+ *   - `float` is decided and executed by a KeeperHub keeper on a schedule, so
+ *     it keeps working while the agent is down — which is the only time running
+ *     out of gas matters. It is recorded here after the fact so it still shows
+ *     up in the ledger.
+ *   - `purchase` is an x402 invoice signed locally by the payer key, because
+ *     x402 settlement is client-side. It goes through the same policy engine
+ *     (see `lucid/pay.ts`) and the same ledger, just not through `move()`.
  */
 
 import type { BursarConfig } from "../config.js";
 import { PRIVATE_MEMPOOL_CHAINS } from "../config.js";
 import type { KeeperHubClient } from "../keeperhub/client.js";
 import { isSuccess, isTerminal, type ExecutionResult } from "../keeperhub/client.js";
-import { Ledger, type LedgerEntry } from "../ledger/store.js";
+import { Ledger, type LedgerEntry, type SubmissionRoute } from "../ledger/store.js";
 import { formatUnits } from "../units.js";
+import { ERC20_APPROVE_ABI } from "./workflows.js";
 import type { Movement, PolicyEngine } from "../policy/engine.js";
 
 /**
@@ -20,6 +32,14 @@ import type { Movement, PolicyEngine } from "../policy/engine.js";
  *
  * Receives the intent id so whatever it calls uses the same idempotency key,
  * which is what makes replay-based reconciliation work for non-transfers too.
+ *
+ * Callers describe the route (see `SubmissionRoute`) rather than passing a
+ * closure, because the route has to outlive the call: a movement held for a
+ * person is submitted hours later, and a movement interrupted mid-flight is
+ * replayed by `reconcile()` in a different process entirely. Neither can
+ * reconstruct a closure, and both used to silently fall back to a plain
+ * transfer — which, for an Aave supply, sends the tokens to the pool contract
+ * and loses them.
  */
 export type Submit = (idempotencyKey: string) => Promise<ExecutionResult>;
 
@@ -77,16 +97,50 @@ export class Executor {
     movement: Movement,
     period: string,
     nonce?: string,
-    submit?: Submit,
+    route?: SubmissionRoute,
   ): Promise<MoveOutcome> {
-    return this.mutex.run(() => this.moveExclusive(movement, period, nonce, submit));
+    return this.mutex.run(() => this.moveExclusive(movement, period, nonce, route));
+  }
+
+  /** Turn a recorded route back into the call that performs it. */
+  private submitFor(route: SubmissionRoute, movement: Movement): Submit {
+    if (route.kind === "workflow") {
+      const { workflowId, allowance } = route;
+      return async (idempotencyKey) => {
+        if (allowance) {
+          // Scoped to exactly the amount about to move, and granted only now —
+          // after policy has cleared the movement, not before it was asked.
+          await this.client.contractCall(
+            {
+              chainId: String(allowance.chainId),
+              contractAddress: allowance.token,
+              abi: ERC20_APPROVE_ABI,
+              functionName: "approve",
+              functionArgs: JSON.stringify([allowance.spender, allowance.amount]),
+            },
+            `${idempotencyKey}-allowance`,
+          );
+        }
+        return this.client.executeWorkflow(workflowId, {}, idempotencyKey);
+      };
+    }
+    return (idempotencyKey) =>
+      this.client.transfer(
+        {
+          chainId: String(movement.chainId),
+          recipientAddress: movement.to,
+          amount: formatUnits(BigInt(movement.amount), movement.decimals),
+          tokenAddress: movement.token ?? undefined,
+        },
+        idempotencyKey,
+      );
   }
 
   private async moveExclusive(
     movement: Movement,
     period: string,
     nonce?: string,
-    submit?: Submit,
+    route: SubmissionRoute = { kind: "transfer" },
     existingIntentId?: string,
   ): Promise<MoveOutcome> {
     const intentId = existingIntentId ?? Ledger.intentId({
@@ -108,6 +162,16 @@ export class Executor {
       };
     }
 
+    // A movement already released by a person skips straight past the
+    // threshold that held it; that decision is what approval means.
+    const released = await this.ledger.isApproved(intentId);
+
+    const decision = await this.policy.evaluate(movement);
+
+    // Built AFTER the evaluation, not before: pricing the movement is part of
+    // evaluating it, and `valueUsdCents` does not exist until the engine has
+    // read the feed. Snapshotting the movement first captured an undefined
+    // every time, which left the cross-asset ceiling summing nothing.
     const base = {
       intentId,
       leg: movement.leg,
@@ -118,13 +182,8 @@ export class Executor {
       decimals: movement.decimals,
       valueUsdCents: movement.valueUsdCents,
       memo: movement.memo,
+      submission: route,
     };
-
-    // A movement already released by a person skips straight past the
-    // threshold that held it; that decision is what approval means.
-    const released = await this.ledger.isApproved(intentId);
-
-    const decision = await this.policy.evaluate(movement);
 
     if (decision.verdict === "deny") {
       return { result: "blocked", reason: decision.reason, verdict: "deny" };
@@ -148,22 +207,11 @@ export class Executor {
 
     let executionId = "";
     try {
-      // A plain transfer unless the caller supplies something else. Supplying
-      // to a lending pool is not a transfer, but it is still value leaving the
+      // A plain transfer unless the route says otherwise. Supplying to a
+      // lending pool is not a transfer, but it is still value leaving the
       // treasury, so it must pass through the same policy, ledger and
       // idempotency rather than around them.
-      const submitted = submit
-        ? await submit(intentId)
-        : await this.client.transfer(
-            {
-              chainId: String(movement.chainId),
-              recipientAddress: movement.to,
-              // The boundary: exact integer base units in, decimal string out.
-              amount: formatUnits(BigInt(movement.amount), movement.decimals),
-              tokenAddress: movement.token ?? undefined,
-            },
-            intentId,
-          );
+      const submitted = await this.submitFor(route, movement)(intentId);
 
       executionId = submitted.executionId;
       await this.ledger.append({ ...base, status: "submitted", executionId });
@@ -244,6 +292,10 @@ export class Executor {
 
       // Re-enter the normal path. Every other check runs again on the way
       // through — approval lifts the threshold, not the allowlist or the caps.
+      //
+      // The route comes from the held row, not from a default: this movement
+      // may be an Aave supply, and sending it as a plain transfer would put the
+      // tokens inside the pool contract with nothing minted back.
       return this.moveExclusive(
         {
           leg: held.leg,
@@ -252,22 +304,31 @@ export class Executor {
           amount: held.amount,
           token: held.token,
           decimals: held.decimals,
+          ...(held.valueUsdCents ? { valueUsdCents: held.valueUsdCents } : {}),
           memo: held.memo,
         },
         "",
         undefined,
-        undefined,
+        held.submission ?? { kind: "transfer" },
         intentId,
       );
     });
   }
 
-  /** Refuse a held movement, so it stops showing up as a decision to make. */
+  /**
+   * Refuse a held movement, so it stops showing up as a decision to make.
+   *
+   * Serialised with the rest, because "approve it" and "cancel it" can arrive
+   * together: read-then-append outside the lock lets both see the same held row
+   * and lets the decline land after the approval has already submitted.
+   */
   async decline(intentId: string, decidedBy: string): Promise<boolean> {
-    const held = (await this.ledger.latestByIntent()).get(intentId);
-    if (!held || held.status !== "awaiting_approval") return false;
-    await this.ledger.append({ ...held, status: "declined", decidedBy });
-    return true;
+    return this.mutex.run(async () => {
+      const held = (await this.ledger.latestByIntent()).get(intentId);
+      if (!held || held.status !== "awaiting_approval") return false;
+      await this.ledger.append({ ...held, status: "declined", decidedBy });
+      return true;
+    });
   }
 
   /**
@@ -301,16 +362,30 @@ export class Executor {
     let resolved = 0;
 
     for (const entry of open) {
-      try {
-        const result = await this.client.transfer(
-          {
-            chainId: String(entry.chainId),
-            recipientAddress: entry.to,
-            amount: formatUnits(BigInt(entry.amount), entry.decimals),
-            tokenAddress: entry.token ?? undefined,
-          },
-          entry.intentId,
+      const route: SubmissionRoute = entry.submission ?? { kind: "transfer" };
+
+      // Not every movement can be resolved by replaying it. An x402 purchase
+      // was paid from the payer key, so KeeperHub has never seen this
+      // idempotency key and "replaying" it would be a second real payment.
+      // Report it and leave it open rather than guess.
+      if (route.kind === "x402") {
+        details.push(
+          `${entry.intentId}: still open — paid over x402 to ${route.url}, which cannot be ` +
+            `replayed safely. Check the payee's records and close it by hand.`,
         );
+        continue;
+      }
+
+      try {
+        const result = await this.submitFor(route, {
+          leg: entry.leg,
+          chainId: entry.chainId,
+          to: entry.to,
+          amount: entry.amount,
+          token: entry.token,
+          decimals: entry.decimals,
+          memo: entry.memo,
+        })(entry.intentId);
 
         const how = result.idempotentReplay ? "already executed" : "completed now";
 

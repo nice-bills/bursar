@@ -32,15 +32,21 @@ counterparty-oracle v1.0.0
 
 ## Why a price cap is not enough
 
-The four outcomes below all came from the same invoice. Only the first is a
-question `maxPriceUsd` can ask.
+The four outcomes below are the four decisions the engine can reach on one
+invoice. Only the first is a question `maxPriceUsd` can ask.
+
+Two of them are in [`lucid-run.txt`](./lucid-run.txt) as captured runs — the
+stale-price refusal and the clear pay. The other two need a config change to
+reproduce (remove the asset's `policy.assets` entry; set
+`policy.requireApprovalAboveUsd` below the price), so they are described here
+rather than captured.
 
 | Situation | Bursar |
 | --- | --- |
 | Asset has no configured limits | refuses — "refusing to pay in an asset with no limits" |
 | Price feed is 18 hours stale | refuses — "refusing to value a movement against a stale price" |
 | Everything clears | pays — `within policy — 0.01 USDC` |
-| Above the approval threshold | holds for a person |
+| Above the approval threshold | holds for a person, and writes the hold to the ledger so it can be approved later |
 
 The payment is written to the intent ledger before it is made, so a crash
 between signing and recording leaves an open intent to reconcile rather than a
@@ -101,7 +107,16 @@ So the paying fetch is never used for the first call:
 1. call the entrypoint with an ordinary fetch, and get the 402
 2. hand the challenge to the policy engine
 3. only if it approves, build the signer
-4. only then record the intent, and retry with payment
+4. only then record the intent, and pay
+
+Step 4 is not literally a retry of the first request. `wrapFetchWithPayment`
+issues its own unpaid call and signs whatever 402 comes back from *that*, so a
+counterparty could quote one price to the policy engine and a different one to
+the signer. Bursar puts a guard underneath the paying fetch: it reads every 402
+before the SDK can act on it and refuses unless every offer on the table — the
+amount, the payee, the asset and the chain — is the one the engine approved.
+Every offer, not just the first, because the SDK picks the first offer it has a
+scheme registered for, which need not be the one that was read.
 
 Step 3 comes before step 4 deliberately. A key that is missing, or a chain this
 payer has no signer for, must fail before anything is written down — a recorded

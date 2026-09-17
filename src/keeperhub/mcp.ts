@@ -11,7 +11,7 @@
  * whose definitions run to ~13k tokens, and `list_action_schemas` answers with
  * close to half a megabyte — a single call would swamp the context it was
  * meant to inform. Instead this client is called from code, the traffic stays
- * in the program, and the agent sees six treasury actions. See
+ * in the program, and the agent sees seven treasury actions. See
  * `npm run context-cost` for the measurement.
  *
  * Transport is streamable HTTP: initialize, keep the session id, then call.
@@ -49,6 +49,7 @@ export class KeeperHubMcp {
   constructor(
     private readonly apiKey: string,
     private readonly url = DEFAULT_MCP_URL,
+    private readonly timeoutMs = 30_000,
   ) {}
 
   /**
@@ -203,6 +204,11 @@ export class KeeperHubMcp {
   // --- transport ----------------------------------------------------------
 
   private async ensureSession(): Promise<void> {
+    // `??=` alone caches the REJECTION too: one transient failure here and
+    // every later call awaits the same settled rejection for the life of the
+    // object, so a single 502 permanently stops the spending-limit read that
+    // this client exists to perform. A failed handshake is cleared so the next
+    // caller genuinely retries; a successful one is still only done once.
     this.initialized ??= (async () => {
       await this.rpc("initialize", {
         protocolVersion: PROTOCOL_VERSION,
@@ -213,7 +219,11 @@ export class KeeperHubMcp {
       // it tools/list comes back empty rather than erroring, which is a
       // confusing way to spend an afternoon.
       await this.rpc("notifications/initialized", {}, true);
-    })();
+    })().catch((error: unknown) => {
+      this.initialized = undefined;
+      this.sessionId = undefined;
+      throw error;
+    });
     await this.initialized;
   }
 
@@ -257,16 +267,35 @@ export class KeeperHubMcp {
       ? { jsonrpc: "2.0", method, params }
       : { jsonrpc: "2.0", id: Math.floor(Math.random() * 1e9), method, params };
 
-    const response = await fetch(this.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
+    // A server that accepts the connection and never answers would otherwise
+    // hang this call forever — and through `getSpendingLimits` that hangs the
+    // policy check, which hangs the movement. The REST client has always done
+    // this; the MCP transport had no deadline at all.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+
+    let response: Response;
+    let text: string;
+    try {
+      response = await fetch(this.url, {
+        method: "POST",
+        headers,
+        signal: controller.signal,
+        body: JSON.stringify(body),
+      });
+      text = await response.text();
+    } catch (error) {
+      if (controller.signal.aborted) {
+        throw new KeeperHubMcpError(`MCP ${method} timed out after ${this.timeoutMs}ms`, "");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
 
     const session = response.headers.get("mcp-session-id");
     if (session) this.sessionId = session;
 
-    const text = await response.text();
     if (!response.ok) {
       throw new KeeperHubMcpError(
         `MCP ${method} failed: ${response.status} ${response.statusText}`,

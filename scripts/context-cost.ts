@@ -9,9 +9,10 @@
  * Anthropic's code-execution pattern for MCP is the alternative: treat the
  * server as an API that *code* calls, keep the traffic in the program, and
  * surface only a small, task-shaped set of tools to the model. That is what
- * Bursar is. It mounts six treasury actions; everything else — schema lookup,
+ * Bursar is. It mounts seven treasury actions; everything else — schema lookup,
  * spending limits, workflow authoring, execution polling — happens in
- * `src/keeperhub/`, where a 666KB schema dump costs the model nothing.
+ * `src/keeperhub/`, where a schema dump of close to half a megabyte costs the
+ * model nothing.
  *
  * This script measures that rather than asserting it.
  *

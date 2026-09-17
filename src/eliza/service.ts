@@ -14,7 +14,7 @@ import { Service, type IAgentRuntime } from "@elizaos/core";
 
 
 import { loadConfig, splitByShares, type BursarConfig } from "../config.js";
-import { KeeperHubClient } from "../keeperhub/client.js";
+import { KeeperHubClient, isSuccess } from "../keeperhub/client.js";
 import { KeeperHubMcp } from "../keeperhub/mcp.js";
 import { Ledger, dailyPeriod, type LedgerEntry } from "../ledger/store.js";
 import { PolicyEngine } from "../policy/engine.js";
@@ -234,14 +234,46 @@ export class BursarService extends Service {
 
       // Run it now too, so "am I low on gas?" gets an answer rather than a
       // promise about the next hour.
+      //
+      // The key is bucketed by the hour the keeper itself runs on, not by
+      // `Date.now()`. A fresh key per call meant two dispatches of CHECK_GAS_FLOAT
+      // — an action retried, or a client timeout while the first run was still
+      // broadcasting — were two genuinely separate executions, each reading the
+      // pre-top-up balance and each sending a full top-up.
+      const bucket = Math.floor(Date.now() / 3_600_000);
       const run = await this.client.executeWorkflow(
         workflowId,
         {},
-        `float-${workflowId}-${Date.now()}`,
+        `float-${workflowId}-${bucket}`,
       );
       const final = await this.client.awaitExecution(run.executionId);
       const toppedUp = final.transactionHashes.length > 0;
       const floorLabel = formatUnits(BigInt(float.minBalance), NATIVE_DECIMALS);
+
+      // Gas is money. The keeper decides and executes server-side, so this is
+      // not a policy gate — but a top-up that never reaches the ledger is value
+      // that left the treasury and does not appear in "where did the money go",
+      // which is the one question the ledger exists to answer.
+      if (toppedUp) {
+        const topUpAmount = (
+          BigInt(float.targetBalance) - BigInt(float.minBalance)
+        ).toString();
+        await this.ledger.append({
+          intentId: `float-${float.chainId}-${float.address}-${bucket}`,
+          leg: "float",
+          chainId: float.chainId,
+          to: float.address,
+          amount: topUpAmount,
+          token: null,
+          decimals: NATIVE_DECIMALS,
+          memo: `gas top-up to ${formatUnits(BigInt(float.targetBalance), NATIVE_DECIMALS)}`,
+          submission: { kind: "workflow" as const, workflowId },
+          status: "confirmed",
+          executionId: final.executionId,
+          transactionHashes: final.transactionHashes,
+          transactionLinks: final.transactionLinks,
+        });
+      }
 
       reports.push({
         chainId: float.chainId,
@@ -513,18 +545,11 @@ export class BursarService extends Service {
     // The pool must be able to pull the tokens before it can be supplied to.
     // Approve is authority, not a transfer, so it is not a ledger movement —
     // but it is scoped to exactly the amount about to be supplied rather than
-    // an unlimited allowance.
+    // an unlimited allowance, and it is carried on the movement's route so it
+    // is granted only once policy has cleared the supply. Granting it here,
+    // before `executor.move`, left a standing allowance behind every supply the
+    // policy engine went on to refuse or hold.
     const pool = await this.aavePoolAddress(cfg.chainId);
-    await this.client.contractCall(
-      {
-        chainId: String(cfg.chainId),
-        contractAddress: cfg.asset,
-        abi: ERC20_APPROVE_ABI,
-        functionName: "approve",
-        functionArgs: JSON.stringify([pool, amount.toString()]),
-      },
-      `approve-${cfg.asset}-${amount}-${period}`,
-    );
 
     const workflow = aaveSupplyWorkflow(
       cfg.chainId,
@@ -547,7 +572,16 @@ export class BursarService extends Service {
       },
       period,
       undefined,
-      (idempotencyKey) => this.client.executeWorkflow(workflowId, {}, idempotencyKey),
+      {
+        kind: "workflow",
+        workflowId,
+        allowance: {
+          chainId: cfg.chainId,
+          token: cfg.asset,
+          spender: pool,
+          amount: amount.toString(),
+        },
+      },
     );
 
     return {
@@ -588,6 +622,10 @@ export class BursarService extends Service {
       const id = await this.ensureWorkflow(workflow.name, workflow);
       const run = await this.client.executeWorkflow(id, {}, `reserve-${id}-${Date.now()}`);
       const final = await this.client.awaitExecution(run.executionId);
+      // A terminal failure can still carry a partial output. Reading it would
+      // turn a failed read into a reserve whose rate is simply missing, which
+      // is exactly the shape the deploy gate has to refuse.
+      if (!isSuccess(final.status)) return null;
       return readReserveData(final.output);
     } catch {
       return null;
@@ -675,12 +713,26 @@ export class BursarService extends Service {
           `${amount} -> ${entry.to}${link ? `  ${link}` : ""}`,
       );
       if (entry.status === "confirmed") {
-        totals.set(entry.leg, (totals.get(entry.leg) ?? 0n) + BigInt(entry.amount));
+        // Keyed by leg AND asset. Summing a 6-decimal USDC purchase into the
+        // same bucket as an 18-decimal native payout adds raw base units of
+        // different sizes, and then printing the total at 18 decimals reported
+        // a $0.01 purchase as 0.00000000000001 of something.
+        const asset = entry.token ?? "native";
+        const key = `${entry.leg}\u0000${asset}\u0000${entry.decimals}`;
+        totals.set(key, (totals.get(key) ?? 0n) + BigInt(entry.amount));
       }
     }
 
+    const symbolFor = (token: string): string =>
+      token === "native"
+        ? "native"
+        : (assetPolicyFor(this.treasuryCfg.policy, token)?.symbol ?? `${token.slice(0, 10)}…`);
+
     const summary = [...totals.entries()]
-      .map(([leg, total]) => `${leg}: ${formatUnits(total, NATIVE_DECIMALS)}`)
+      .map(([key, total]) => {
+        const [leg, asset, decimals] = key.split("\u0000") as [string, string, string];
+        return `${leg}: ${formatUnits(total, Number(decimals))} ${symbolFor(asset)}`;
+      })
       .join(", ");
 
     const open = entries.filter((e) => e.status === "intent" || e.status === "submitted").length;

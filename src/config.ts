@@ -22,7 +22,13 @@ export const CHAIN = {
   tempoTestnet: 42431,
 } as const;
 
-/** Only these two support MEV-protected submission. Payouts prefer them. */
+/**
+ * Only these two support MEV-protected submission.
+ *
+ * Reported on a movement, never used to choose one: payouts go out on the chain
+ * that holds the money. Preferring a private-mempool chain silently redirected
+ * them somewhere the funds were not.
+ */
 export const PRIVATE_MEMPOOL_CHAINS: number[] = [CHAIN.ethereum, CHAIN.sepolia];
 
 const address = z

@@ -2,6 +2,13 @@ node_modules/
 dist/
 .env
 *.log
+
+# The ledger. Real movements, real addresses — and it is state, not source.
 data/
 .build
 examples/*/node_modules
+
+# Remotion's render output. `bursar-demo.mp4` is committed deliberately; the
+# scratch directories it renders through are not.
+video/out/
+video/.remotion/

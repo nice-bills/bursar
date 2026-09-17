@@ -18,6 +18,14 @@
  *
  * By the time anything can sign, the decision is already made and written down.
  *
+ * Step 4 is not literally a retry of the paid request: `wrapFetchWithPayment`
+ * issues its own unpaid call and signs whatever 402 comes back from THAT. So
+ * the approved terms are not automatically the terms that get signed — a server
+ * is free to quote one price to the policy engine and a different one to the
+ * signer. `guardChallenge` closes that window: it sits underneath the paying
+ * fetch, inspects every 402 before the SDK can act on it, and throws unless
+ * every offer on the table is the one policy approved.
+ *
  * ## The key
  *
  * Read from the environment and never logged, never returned, never put in the
@@ -30,11 +38,11 @@
 import { createPublicClient, http as viemHttp } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia, base } from "viem/chains";
-import { wrapFetchWithPayment, x402Client } from "@x402/fetch";
+import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
 
 import { Ledger, dailyPeriod } from "../ledger/store.js";
-import type { PaymentPlan } from "./pay.js";
+import { chainIdFromNetwork, type PaymentPlan } from "./pay.js";
 
 /** The chains this payer knows how to sign for. */
 const CHAINS = {
@@ -91,7 +99,9 @@ function normalizeKey(key: string): `0x${string}` {
  */
 export function createPayingFetch(
   chainId: number,
+  plan: PaymentPlan,
   env: NodeJS.ProcessEnv = process.env,
+  signed: { attempted: boolean } = { attempted: false },
 ): typeof fetch {
   const key = env.BURSAR_PAYER_PRIVATE_KEY;
   if (!key) {
@@ -123,7 +133,136 @@ export function createPayingFetch(
     new ExactEvmScheme(toClientEvmSigner(account, reader)),
   );
 
-  return wrapFetchWithPayment(globalThis.fetch, client);
+  return wrapFetchWithPayment(guardChallenge(globalThis.fetch, plan, signed), client);
+}
+
+/** Fields of a single x402 offer, however the issuer spelled them. */
+function offerTerms(offer: Record<string, unknown>): {
+  amount?: string;
+  payTo?: string;
+  asset?: string;
+  chainId: number | null;
+} {
+  const str = (key: string): string | undefined =>
+    typeof offer[key] === "string"
+      ? (offer[key] as string)
+      : typeof offer[key] === "number"
+        ? String(offer[key])
+        : undefined;
+  return {
+    ...(str("maxAmountRequired") ?? str("amount")
+      ? { amount: (str("maxAmountRequired") ?? str("amount"))! }
+      : {}),
+    ...(str("payTo") ? { payTo: str("payTo")! } : {}),
+    ...(str("asset") ? { asset: str("asset")! } : {}),
+    chainId: chainIdFromNetwork(str("network")),
+  };
+}
+
+const same = (a: string | undefined, b: string | undefined): boolean =>
+  (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
+
+/**
+ * Refuse a 402 that is not the invoice policy approved.
+ *
+ * Every offer is checked, not just the first: the SDK picks the first offer it
+ * has a scheme registered for, which need not be the one `planPayment` read. An
+ * offer list where any entry differs from the approved terms is a list where
+ * what gets signed is not what was decided, so the whole response is refused.
+ */
+export function assertChallengeMatchesPlan(body: unknown, plan: PaymentPlan): void {
+  const envelope = body as { accepts?: unknown } | null;
+  const offers = Array.isArray(envelope?.accepts)
+    ? (envelope.accepts as Record<string, unknown>[])
+    : envelope
+      ? [envelope as Record<string, unknown>]
+      : [];
+
+  if (offers.length === 0) {
+    throw new SettlementError(
+      "the entrypoint asked for payment again but the challenge could not be read, " +
+        "so there is nothing to check the approved terms against",
+    );
+  }
+
+  for (const offer of offers) {
+    const terms = offerTerms(offer);
+    const mismatch =
+      (terms.amount !== undefined && terms.amount !== plan.amount) ||
+      (terms.payTo !== undefined && !same(terms.payTo, plan.payTo)) ||
+      (terms.asset !== undefined && !same(terms.asset, plan.asset)) ||
+      (terms.chainId !== null && terms.chainId !== plan.chainId);
+
+    if (mismatch) {
+      throw new SettlementError(
+        `the invoice changed between approval and payment. Approved ` +
+          `${plan.amount} of ${plan.asset} to ${plan.payTo} on chain ${plan.chainId}; ` +
+          `now asked for ${terms.amount ?? "?"} of ${terms.asset ?? "?"} to ` +
+          `${terms.payTo ?? "?"} on chain ${terms.chainId ?? "?"}. Nothing was signed.`,
+      );
+    }
+  }
+}
+
+/**
+ * A fetch that lets the paying wrapper see a 402 only once it matches the plan.
+ *
+ * The body is read from a clone, so the response the SDK receives is untouched.
+ */
+function guardChallenge(
+  inner: typeof globalThis.fetch,
+  plan: PaymentPlan,
+  signed: { attempted: boolean },
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const response = await inner(input, init);
+    if (response.status !== 402) return response;
+
+    let parsed: unknown = null;
+    try {
+      const text = await response.clone().text();
+      parsed = text ? JSON.parse(text) : null;
+    } catch {
+      parsed = null;
+    }
+    assertChallengeMatchesPlan(parsed, plan);
+    // Past this point the wrapper will sign and send an authorisation, so the
+    // counterparty is able to take the money whatever it answers afterwards.
+    signed.attempted = true;
+    return response;
+  };
+}
+
+/**
+ * What the counterparty says it settled.
+ *
+ * The `x-payment-response` header is a base64 `SettleResponse`, not a
+ * transaction hash. Storing it raw put a base64 blob where every other leg puts
+ * a hash — printed as an explorer link, and useless for reconciling.
+ */
+function readReceipt(header: string | undefined): {
+  settled: boolean;
+  transactionHash?: string;
+  raw?: string;
+} {
+  if (!header) return { settled: false };
+  try {
+    const decoded = decodePaymentResponseHeader(header) as {
+      success?: boolean;
+      transaction?: string;
+    };
+    const hash =
+      typeof decoded.transaction === "string" && /^0x[0-9a-fA-F]{64}$/.test(decoded.transaction)
+        ? decoded.transaction
+        : undefined;
+    return {
+      settled: decoded.success === true,
+      ...(hash ? { transactionHash: hash } : {}),
+      raw: header,
+    };
+  } catch {
+    return { settled: false, raw: header };
+  }
 }
 
 /** What happened when an approved invoice was actually paid. */
@@ -169,13 +308,17 @@ export async function settle(
     token: plan.asset,
     decimals: plan.decimals ?? 6,
     memo: `x402 invoice — ${request.url}`,
+    // Paid from the payer key, not through KeeperHub. reconcile() must report
+    // this rather than "replay" it into a second real payment.
+    submission: { kind: "x402" as const, url: request.url },
   };
 
   // Build the signer first. If there is no key, or no signer for this chain,
   // nothing has been attempted and nothing should be written down — a recorded
   // intent for a payment that was never tried is a phantom for reconcile to
   // chase against a chain where it cannot possibly appear.
-  const payingFetch = createPayingFetch(plan.chainId, env);
+  const signed = { attempted: false };
+  const payingFetch = createPayingFetch(plan.chainId, plan, env, signed);
 
   // Written before anything is signed.
   await ledger.append({ ...entry, status: "intent" });
@@ -188,20 +331,29 @@ export async function settle(
     });
 
     const text = await response.text();
+
+    // The server reports settlement in a response header when it settles.
+    const receipt = readReceipt(
+      response.headers.get("x-payment-response") ??
+        response.headers.get("payment-response") ??
+        undefined,
+    );
+
     if (!response.ok) {
+      // An error AFTER an authorisation was signed is not proof the money
+      // stayed put — the counterparty holds a signed authorisation and chooses
+      // its own response code. Leaving it open counts it against the caps and
+      // forces a person to look, which is the safe reading of "we do not know".
+      const ambiguous = signed.attempted;
       await ledger.append({
         ...entry,
-        status: "failed",
-        error: `${response.status} ${response.statusText}: ${text.slice(0, 200)}`,
+        status: ambiguous ? "submitted" : "failed",
+        error:
+          `${response.status} ${response.statusText}: ${text.slice(0, 200)}` +
+          (ambiguous ? " (a payment was signed before this failed)" : ""),
       });
       return { paid: false, output: null, error: `${response.status} ${response.statusText}` };
     }
-
-    // The server reports settlement in a response header when it settles.
-    const receipt =
-      response.headers.get("x-payment-response") ??
-      response.headers.get("payment-response") ??
-      undefined;
 
     let output: unknown = null;
     try {
@@ -211,13 +363,29 @@ export async function settle(
       output = text;
     }
 
+    // A 200 is the entrypoint answering, not the facilitator settling. When the
+    // receipt says the settlement failed, the invoice is not paid.
+    if (signed.attempted && receipt.raw && !receipt.settled) {
+      await ledger.append({
+        ...entry,
+        status: "submitted",
+        error: "the entrypoint answered but its settlement receipt does not report success",
+      });
+      return {
+        paid: false,
+        output,
+        ...(receipt.raw ? { receipt: receipt.raw } : {}),
+        error: "settlement not confirmed by the receipt",
+      };
+    }
+
     await ledger.append({
       ...entry,
       status: "confirmed",
-      ...(receipt ? { transactionHashes: [receipt] } : {}),
+      ...(receipt.transactionHash ? { transactionHashes: [receipt.transactionHash] } : {}),
     });
 
-    return { paid: true, output, receipt };
+    return { paid: true, output, ...(receipt.raw ? { receipt: receipt.raw } : {}) };
   } catch (error) {
     const why = error instanceof Error ? error.message : String(error);
     // The intent stays open rather than being closed as failed when we cannot
