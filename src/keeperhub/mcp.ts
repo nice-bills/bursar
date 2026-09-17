@@ -166,12 +166,17 @@ export class KeeperHubMcp {
       "";
 
     const parsed = parseEmbeddedJson(text);
+    const isError = Boolean(response.result?.isError || response.error);
 
     return {
-      isError: Boolean(response.result?.isError || response.error),
+      isError,
       text,
       json: parsed,
-      challenge: readPaymentChallenge(parsed, text),
+      // Only an ERROR result can be a payment challenge. Read unconditionally,
+      // a successful result that merely echoes an `amount` or a `payTo` — or
+      // contains a standalone 402 anywhere, a block number will do — was
+      // reported as the listing demanding payment.
+      challenge: isError ? readPaymentChallenge(parsed, text) : null,
     };
   }
 
@@ -199,6 +204,28 @@ export class KeeperHubMcp {
     const all = await this.listActionSchemas();
     const found = search(all, actionType);
     return found ? (found as ActionSchema) : null;
+  }
+
+  /**
+   * End the MCP session.
+   *
+   * The server holds state per `Mcp-Session-Id`; without this it leaks for the
+   * lifetime of the process. Best-effort: a failure here is not worth failing a
+   * shutdown over.
+   */
+  async close(): Promise<void> {
+    const session = this.sessionId;
+    this.initialized = undefined;
+    this.sessionId = undefined;
+    if (!session) return;
+    try {
+      await fetch(this.url, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${this.apiKey}`, "Mcp-Session-Id": session },
+      });
+    } catch {
+      // The session expires on its own; nothing here is worth surfacing.
+    }
   }
 
   // --- transport ----------------------------------------------------------
@@ -263,9 +290,10 @@ export class KeeperHubMcp {
     };
     if (this.sessionId) headers["Mcp-Session-Id"] = this.sessionId;
 
+    const requestId = notify ? undefined : Math.floor(Math.random() * 1e9);
     const body = notify
       ? { jsonrpc: "2.0", method, params }
-      : { jsonrpc: "2.0", id: Math.floor(Math.random() * 1e9), method, params };
+      : { jsonrpc: "2.0", id: requestId, method, params };
 
     // A server that accepts the connection and never answers would otherwise
     // hang this call forever — and through `getSpendingLimits` that hangs the
@@ -304,11 +332,39 @@ export class KeeperHubMcp {
     }
     if (notify) return null;
 
+    // The Accept header offers `text/event-stream`, and a Streamable HTTP
+    // server may take it up on any POST. Parsing only JSON meant a compliant
+    // server could fail every call with "non-JSON body".
+    const contentType = response.headers.get("content-type") ?? "";
+    const payload = contentType.includes("text/event-stream") ? readEventStream(text) : text;
+
+    if (payload === null) {
+      throw new KeeperHubMcpError(
+        `MCP ${method} returned an event stream with no data frame`,
+        text.slice(0, 300),
+      );
+    }
+
+    let parsed: unknown;
     try {
-      return JSON.parse(text);
+      parsed = JSON.parse(payload);
     } catch {
       throw new KeeperHubMcpError(`MCP ${method} returned a non-JSON body`, text.slice(0, 300));
     }
+
+    // A JSON-RPC response carries back the id it is answering. Accepting one
+    // that does not match means accepting another call's result as this one's.
+    const envelope = parsed as { id?: unknown } | null;
+    if (requestId !== undefined && envelope && typeof envelope === "object" && "id" in envelope) {
+      if (envelope.id !== requestId) {
+        throw new KeeperHubMcpError(
+          `MCP ${method} answered id ${String(envelope.id)}, expected ${requestId}`,
+          payload.slice(0, 300),
+        );
+      }
+    }
+
+    return parsed;
   }
 }
 
@@ -493,19 +549,52 @@ function toBigInt(value: unknown): bigint | null {
 }
 
 /** Depth-first hunt for the object describing one action type. */
-function search(node: unknown, actionType: string): unknown {
+/**
+ * Pull the JSON out of an SSE body.
+ *
+ * MCP sends one JSON-RPC message per `data:` frame; the last complete one is
+ * the answer to this request.
+ */
+function readEventStream(text: string): string | null {
+  const frames: string[] = [];
+  let current: string[] = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    if (rawLine === "") {
+      if (current.length > 0) frames.push(current.join("\n"));
+      current = [];
+      continue;
+    }
+    if (rawLine.startsWith("data:")) current.push(rawLine.slice(5).trimStart());
+  }
+  if (current.length > 0) frames.push(current.join("\n"));
+  return frames.length > 0 ? frames[frames.length - 1]! : null;
+}
+
+/**
+ * Depth- and cycle-bounded search for an action schema.
+ *
+ * The schema dump is close to half a megabyte of nested objects. An unbounded
+ * walk over an arbitrary server response is a stack overflow waiting for a
+ * deeply nested or self-referential payload.
+ */
+function search(node: unknown, actionType: string, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (depth > 32) return null;
   if (Array.isArray(node)) {
+    if (seen.has(node)) return null;
+    seen.add(node);
     for (const item of node) {
-      const found = search(item, actionType);
+      const found = search(item, actionType, depth + 1, seen);
       if (found) return found;
     }
     return null;
   }
   if (node && typeof node === "object") {
+    if (seen.has(node)) return null;
+    seen.add(node);
     const record = node as Record<string, unknown>;
     if (record.actionType === actionType) return record;
     for (const value of Object.values(record)) {
-      const found = search(value, actionType);
+      const found = search(value, actionType, depth + 1, seen);
       if (found) return found;
     }
   }

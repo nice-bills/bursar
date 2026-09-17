@@ -513,7 +513,10 @@ describe("settlement only ever follows approval", () => {
     // The one ordering that must never reverse. `@x402/fetch` offers a fetch
     // that pays any 402 it meets, which would route money around the engine
     // rather than through it — so settlement asserts the decision was made.
-    const ledger = new Ledger("/tmp/unused-bursar-ledger.jsonl");
+    // A per-run temp path, not a fixed one in /tmp: these tests throw before
+    // appending today, but a shared world-writable path is one refactor away
+    // from colliding between concurrent runs and between users on one machine.
+    const ledger = new Ledger(join(await mkdtemp(join(tmpdir(), "bursar-lucid-")), "ledger.jsonl"));
     for (const outcome of ["refuse", "hold"] as const) {
       await assert.rejects(
         () =>
@@ -530,7 +533,10 @@ describe("settlement only ever follows approval", () => {
   });
 
   test("refuses an approved plan that is missing its details", async () => {
-    const ledger = new Ledger("/tmp/unused-bursar-ledger.jsonl");
+    // A per-run temp path, not a fixed one in /tmp: these tests throw before
+    // appending today, but a shared world-writable path is one refactor away
+    // from colliding between concurrent runs and between users on one machine.
+    const ledger = new Ledger(join(await mkdtemp(join(tmpdir(), "bursar-lucid-")), "ledger.jsonl"));
     await assert.rejects(
       () =>
         settle(

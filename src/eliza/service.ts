@@ -66,7 +66,7 @@ export interface YieldReport {
    * Null when the protocol could not be read — which is itself a reason not to
    * have supplied.
    */
-  apyBps: string | null;
+  aprBps: string | null;
   /** Supplied balance including accrued interest, as Aave reports it. */
   suppliedBalance: string | null;
   note: string;
@@ -134,32 +134,38 @@ export class BursarService extends Service {
     // One writer per ledger file. Fails loudly if another process holds it.
     await this.ledger.acquire();
 
-    // The platform's cap is the one that actually binds. Without this reader
-    // the policy engine enforces only the local ceiling, which can sit above
-    // what KeeperHub will honour — movements then pass every local check and
-    // fail at the API for a reason the engine never saw.
-    this.mcp = new KeeperHubMcp(apiKey, setting(runtime, "KEEPERHUB_MCP_URL"));
+    // Everything from here can throw, and the runtime does not await start(),
+    // so a throw would reject unobserved with the lock still held — leaving the
+    // next process refused for the full stale-lock window.
+    try {
+      // The platform's cap is the one that actually binds. Without this reader
+      // the policy engine enforces only the local ceiling, which can sit above
+      // what KeeperHub will honour — movements then pass every local check and
+      // fail at the API for a reason the engine never saw.
+      this.mcp = new KeeperHubMcp(apiKey, setting(runtime, "KEEPERHUB_MCP_URL"));
 
-    this.executor = new Executor(
-      this.client,
-      this.ledger,
-      new PolicyEngine(
-        this.treasuryCfg,
+      this.executor = new Executor(
+        this.client,
         this.ledger,
-        () => this.mcp.getSpendingLimits(),
-        new Valuation(
-          this.client,
-          60_000,
-          this.treasuryCfg.policy.maxPriceAgeSeconds,
+        new PolicyEngine(
+          this.treasuryCfg,
+          this.ledger,
+          () => this.mcp.getSpendingLimits(),
+          new Valuation(this.client, 60_000, this.treasuryCfg.policy.maxPriceAgeSeconds),
         ),
-      ),
-      this.treasuryCfg,
-    );
+        this.treasuryCfg,
+      );
+    } catch (error) {
+      await this.ledger.release();
+      throw error;
+    }
   }
 
   override async stop(): Promise<void> {
     // The client is stateless and the ledger is written append-only per call,
-    // so there is no buffered state to lose — only the write lock to hand back.
+    // so there is no buffered state to lose — only the write lock to hand back
+    // and the MCP session to end, which the server holds until told otherwise.
+    await this.mcp?.close();
     await this.ledger?.release();
   }
 
@@ -473,7 +479,7 @@ export class BursarService extends Service {
         asset: "",
         balance: null,
         supplied: null,
-        apyBps: null,
+        aprBps: null,
         suppliedBalance: null,
         note: "no treasury address",
       };
@@ -486,7 +492,7 @@ export class BursarService extends Service {
         asset: cfg.asset,
         balance: null,
         supplied: null,
-        apyBps: null,
+        aprBps: null,
         suppliedBalance: null,
         note: `no policy.assets entry for ${cfg.asset}; refusing to supply it`,
       };
@@ -499,7 +505,7 @@ export class BursarService extends Service {
         asset: cfg.asset,
         balance: null,
         supplied: null,
-        apyBps: null,
+        aprBps: null,
         suppliedBalance: null,
         note: "balance could not be read",
       };
@@ -513,7 +519,7 @@ export class BursarService extends Service {
         asset: cfg.asset,
         balance: balance.toString(),
         supplied: null,
-        apyBps: null,
+        aprBps: null,
         suppliedBalance: null,
         note: `no surplus above the ${formatUnits(buffer, assetPolicy.decimals)} buffer`,
       };
@@ -526,14 +532,14 @@ export class BursarService extends Service {
     // closed — not knowing what Aave pays is not the same as Aave paying
     // enough, and the difference is a transaction fee spent on nothing.
     const reserve = await this.readAaveReserve(cfg.chainId, cfg.asset, holder, assetPolicy.symbol);
-    const decision = shouldDeploy(reserve, BigInt(cfg.minApyBps));
+    const decision = shouldDeploy(reserve, BigInt(cfg.minAprBps));
     if (!decision.deploy) {
       return {
         symbol: assetPolicy.symbol,
         asset: cfg.asset,
         balance: balance.toString(),
         supplied: null,
-        apyBps: reserve ? decision.apyBps.toString() : null,
+        aprBps: reserve ? decision.aprBps.toString() : null,
         suppliedBalance: reserve?.currentATokenBalance.toString() ?? null,
         note: `not supplying — ${decision.reason}`,
       };
@@ -589,7 +595,7 @@ export class BursarService extends Service {
       asset: cfg.asset,
       balance: balance.toString(),
       supplied: outcome.result === "confirmed" ? amount.toString() : null,
-      apyBps: decision.apyBps.toString(),
+      aprBps: decision.aprBps.toString(),
       suppliedBalance: reserve?.currentATokenBalance.toString() ?? null,
       note:
         outcome.result === "confirmed"

@@ -20,7 +20,8 @@
     "context-cost": "tsx scripts/context-cost.ts",
     "prepare": "npm run build",
     "aave": "tsx scripts/aave.ts",
-    "lucid": "tsx scripts/lucid.ts"
+    "lucid": "tsx scripts/lucid.ts",
+    "check:imports": "! grep -rnE 'from \"[.]{1,2}/[^\"]*\"' src/ | grep -vE '[.]js\"|[.]json\"'"
   },
   "dependencies": {
     "@x402/evm": "^2.26.0",
@@ -29,6 +30,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@elizaos/core": "^1.7.2",
     "@elizaos/plugin-bootstrap": "^1.7.2",
     "@elizaos/plugin-openrouter": "^1.5.17",
     "@elizaos/plugin-sql": "^1.7.2",
@@ -38,7 +40,8 @@
     "typescript": "^5.6.0"
   },
   "allowScripts": {
-    "esbuild@0.28.2": true
+    "esbuild@0.28.2": true,
+    "bun@1.4.2": false
   },
   "peerDependencies": {
     "@elizaos/core": "^1.7.2"

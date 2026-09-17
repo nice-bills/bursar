@@ -280,6 +280,18 @@ export interface InvokeOutcome {
   raw: unknown;
 }
 
+/** A redirect is a different resource from the one that was quoted. */
+function assertNotRedirected(response: Response, url: string): void {
+  if (response.status >= 300 && response.status < 400) {
+    throw new LucidError(
+      `${url} redirected to ${response.headers.get("location") ?? "somewhere unstated"}. ` +
+        `Point --url at the final address instead; following it would call, and possibly ` +
+        `pay, a host that was never named.`,
+      response.status,
+    );
+  }
+}
+
 export class LucidAgent {
   constructor(
     private readonly agentUrl: string,
@@ -291,7 +303,12 @@ export class LucidAgent {
     const url = `${base(this.agentUrl)}/.well-known/agent-card.json`;
     const response = await this.fetchImpl(url, {
       headers: { Accept: "application/json" },
+      // Never follow a redirect off the host the operator named. Discovery
+      // that can be bounced elsewhere is discovery that can point the payer at
+      // an endpoint nobody chose.
+      redirect: "manual",
     });
+    assertNotRedirected(response, url);
     const text = await response.text();
     if (!response.ok) {
       throw new LucidError(
@@ -329,8 +346,13 @@ export class LucidAgent {
     const response = await this.fetchImpl(url, {
       method: "POST",
       headers,
+      // A redirect here would re-send the body — and `X-PAYMENT` with it,
+      // since a custom header is not stripped cross-origin the way
+      // Authorization is.
+      redirect: "manual",
       body: JSON.stringify({ input }),
     });
+    assertNotRedirected(response, url);
 
     const text = await response.text();
     const parsed = parseEmbeddedJson(text);

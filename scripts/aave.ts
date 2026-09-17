@@ -13,7 +13,7 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 
-import { loadConfig } from "../src/config.js";
+import { assetPolicyFor, loadConfig } from "../src/config.js";
 import { KeeperHubClient, KeeperHubError } from "../src/keeperhub/client.js";
 import { Ledger } from "../src/ledger/store.js";
 import { formatUnits } from "../src/units.js";
@@ -26,7 +26,7 @@ import {
   readReserveData,
   accruedInterest,
   shouldDeploy,
-  formatApy,
+  formatRate,
   formatHealthFactor,
   rayToBps,
 } from "../src/yield/aave.js";
@@ -116,7 +116,7 @@ async function main(): Promise<void> {
   }
 
   const { chainId, asset, poolAddress } = config.yield;
-  const MIN_APY_BPS = BigInt(config.yield.minApyBps ?? 0);
+  const MIN_APY_BPS = BigInt(config.yield.minAprBps);
 
   // Every read below is scoped to a holder, so without one there is nothing to
   // ask Aave about. The address is optional in config because it can fall back
@@ -129,8 +129,8 @@ async function main(): Promise<void> {
         "to the wallet whose position you want to read.",
     );
   }
-  const symbol = config.policy.assets[asset]?.symbol ?? "asset";
-  const decimals = config.policy.assets[asset]?.decimals ?? 18;
+  const symbol = assetPolicyFor(config.policy, asset)?.symbol ?? "asset";
+  const decimals = assetPolicyFor(config.policy, asset)?.decimals ?? 18;
 
   const client = new KeeperHubClient({ apiKey, baseUrl: process.env.KEEPERHUB_BASE_URL });
   const rows = ((await client.listWorkflows()) ?? []) as Array<{ id: string; name: string }>;
@@ -180,14 +180,29 @@ async function main(): Promise<void> {
     console.log(
       rateRay === undefined
         ? `  supply APR: unreadable — the gate will refuse to supply`
-        : `  supply APR: ${formatApy(rateRay)} (${rayToBps(rateRay)} bps)`,
+        : `  supply APR: ${formatRate(rateRay)} (${rayToBps(rateRay)} bps)`,
     );
     console.log(`  collateral: ${reserve.usageAsCollateralEnabled ? "enabled" : "disabled"}`);
 
     // Interest earned, measured against what the ledger says we put in.
     const ledger = new Ledger(process.env.BURSAR_LEDGER_PATH ?? "data/ledger.jsonl");
+    // The service holds this lock for its whole life; a script writing the
+    // same file has to take it too, or the two interleave appends and each
+    // reads the caps before the other writes.
+    await ledger.acquire();
+    // Release on every exit path. A lock left behind by a crashed script is
+    // taken over as stale eventually, but not before it has refused a run.
+    const releaseLock = () => void ledger.release();
+    process.once("exit", releaseLock);
+    process.once("SIGINT", () => {
+      releaseLock();
+      process.exit(130);
+    });
+    // Latest row per intent, not every row: two confirmed rows for one intent
+    // would otherwise count the same supply twice. This is what every
+    // aggregate on the Ledger itself does.
     let principal = 0n;
-    for (const entry of await ledger.all()) {
+    for (const entry of (await ledger.latestByIntent()).values()) {
       if (entry.leg !== "yield" || entry.status !== "confirmed") continue;
       if (entry.token?.toLowerCase() !== asset.toLowerCase()) continue;
       principal += BigInt(entry.amount);
@@ -195,7 +210,18 @@ async function main(): Promise<void> {
     if (principal > 0n) {
       const earned = accruedInterest(reserve, principal);
       console.log(`\n  supplied by Bursar: ${formatUnits(principal, decimals)} ${symbol}`);
-      console.log(`  accrued interest  : ${formatUnits(earned, decimals)} ${symbol}`);
+      if (earned.principalIsStale) {
+        // Withdrawals do not write ledger movements, so the recorded principal
+        // is what went IN, not what is still there.
+        console.log(
+          `  accrued interest  : not derivable — the position (` +
+            `${formatUnits(reserve.currentATokenBalance, decimals)} ${symbol}) is below the ` +
+            `${formatUnits(principal, decimals)} ${symbol} supplied, so something has been ` +
+            `withdrawn since.`,
+        );
+      } else {
+        console.log(`  accrued interest  : ${formatUnits(earned.interest, decimals)} ${symbol}`);
+      }
     }
 
     // The gate that now governs deployment.
@@ -222,7 +248,7 @@ async function main(): Promise<void> {
       floorRay,
       amount,
     );
-    console.log(`\nAuthoring the rate keeper — floor ${formatApy(floorRay)}...`);
+    console.log(`\nAuthoring the rate keeper — floor ${formatRate(floorRay)}...`);
     const output = await runWorkflow(client, workflow, known);
 
     // Whether the gate held is the whole result. A keeper that withdrew when

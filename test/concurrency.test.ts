@@ -143,6 +143,35 @@ describe("concurrent movements cannot breach the daily cap", () => {
       assert.equal(results[2]?.result, "confirmed");
     });
   });
+
+  test("a movement that THROWS does not poison the ones queued behind it", async () => {
+    // The case above is a policy denial, which `moveExclusive` RETURNS rather
+    // than throws — so the mutex's rejection handling was never exercised, and
+    // a naive `tail.then(fn)` would have passed it. This one really rejects.
+    await withExecutor({ maxPerTransfer: "1000", maxPerDay: "100000" }, async ({ executor, ledger }) => {
+      const realAppend = ledger.append.bind(ledger);
+      let failNext = true;
+      ledger.append = async (entry) => {
+        if (failNext) {
+          failNext = false;
+          throw new Error("disk went away mid-write");
+        }
+        return realAppend(entry);
+      };
+
+      const results = await Promise.allSettled([
+        executor.move(movement(contributors[0]!.address, "1000"), "boom"),
+        executor.move(movement(contributors[1]!.address, "1000"), "after"),
+      ]);
+
+      assert.equal(results[0]?.status, "rejected", "the first movement must surface its error");
+      assert.equal(
+        results[1]?.status,
+        "fulfilled",
+        "a rejection must not leave the mutex chain permanently rejected",
+      );
+    });
+  });
 });
 
 describe("ledger locking keeps two processes apart", () => {

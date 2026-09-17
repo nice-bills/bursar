@@ -12,7 +12,7 @@
  * everything else at this size.
  */
 
-import { appendFile, mkdir, readFile, writeFile, unlink } from "node:fs/promises";
+import { mkdir, open, readFile, writeFile, unlink } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 
@@ -143,12 +143,53 @@ const INBOUND = new Set<Leg>(["earning"]);
 /** A crashed holder should not wedge the treasury forever. */
 const LOCK_STALE_MS = 10 * 60 * 1000;
 
+/**
+ * Serialises check-then-act sequences against one ledger.
+ *
+ * It lives here rather than in the Executor because the ledger is the shared
+ * thing. Every path that reads the caps and then writes a movement has to take
+ * the same lock, and the x402 purchase path does not go through the Executor —
+ * so a mutex owned by the Executor left that path racing every other one.
+ */
+class Mutex {
+  private tail: Promise<unknown> = Promise.resolve();
+
+  run<T>(fn: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(fn, fn);
+    // Keep the chain alive even when a caller rejects, or one failure would
+    // poison every movement that follows it.
+    this.tail = result.catch(() => undefined);
+    return result;
+  }
+}
+
 export class Ledger {
   private lockPath: string;
   private holdsLock = false;
+  /**
+   * Proves this instance owns the lock file it is about to delete.
+   *
+   * A pid is not enough: after a stale takeover two processes can briefly both
+   * believe they hold the lock, and `release()` unlinking unconditionally would
+   * delete whichever lock happens to be there — including a live one belonging
+   * to someone else.
+   */
+  private lockToken?: string;
+
+  private readonly mutex = new Mutex();
 
   constructor(private readonly path = "data/ledger.jsonl") {
     this.lockPath = `${this.path}.lock`;
+  }
+
+  /**
+   * Run a read-then-write sequence with no other such sequence interleaved.
+   *
+   * Not reentrant: code already inside `serialize` must call the underlying
+   * methods directly rather than nesting another call.
+   */
+  serialize<T>(fn: () => Promise<T>): Promise<T> {
+    return this.mutex.run(fn);
   }
 
   /**
@@ -168,12 +209,19 @@ export class Ledger {
     await mkdir(dirname(this.path), { recursive: true });
 
     for (let attempt = 0; attempt < 2; attempt++) {
+      const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       try {
         await writeFile(
           this.lockPath,
-          JSON.stringify({ pid: process.pid, at: new Date().toISOString() }),
+          JSON.stringify({ pid: process.pid, at: new Date().toISOString(), token }),
           { flag: "wx" },
         );
+        // Read it back. If a concurrent stale-takeover unlinked ours between
+        // the create and now, the file on disk is someone else's and this
+        // instance does not hold the lock it thinks it does.
+        const written = await this.readLock();
+        if (written?.token !== token) continue;
+        this.lockToken = token;
         this.holdsLock = true;
         return;
       } catch (error) {
@@ -196,18 +244,28 @@ export class Ledger {
 
   async release(): Promise<void> {
     if (!this.holdsLock) return;
+    const token = this.lockToken;
     this.holdsLock = false;
+    this.lockToken = undefined;
+    // Only remove the lock if it is still ours.
+    const holder = await this.readLock();
+    if (holder && holder.token !== token) return;
     await unlink(this.lockPath).catch(() => undefined);
   }
 
-  private async readLock(): Promise<{ pid: number; at: string } | null> {
+  private async readLock(): Promise<{ pid: number; at: string; token?: string } | null> {
     try {
       const parsed = JSON.parse(await readFile(this.lockPath, "utf8")) as {
         pid?: number;
         at?: string;
+        token?: string;
       };
       if (typeof parsed.pid !== "number" || typeof parsed.at !== "string") return null;
-      return { pid: parsed.pid, at: parsed.at };
+      return {
+        pid: parsed.pid,
+        at: parsed.at,
+        ...(typeof parsed.token === "string" ? { token: parsed.token } : {}),
+      };
     } catch {
       return null;
     }
@@ -256,10 +314,31 @@ export class Ledger {
     return `bursar-${createHash("sha256").update(material).digest("hex").slice(0, 32)}`;
   }
 
-  async append(entry: Omit<LedgerEntry, "at">): Promise<LedgerEntry> {
-    const full: LedgerEntry = { ...entry, at: new Date().toISOString() };
+  /**
+   * `at` is stamped here, not taken from the caller, so a movement cannot
+   * backdate itself out of the rolling window that bounds the daily caps.
+   *
+   * `now` exists only so tests can construct an aged ledger: the 24h window —
+   * the mechanism by which a daily cap resets — was otherwise unreachable
+   * through the public API and therefore untested.
+   */
+  async append(
+    entry: Omit<LedgerEntry, "at">,
+    now: Date = new Date(),
+  ): Promise<LedgerEntry> {
+    const full: LedgerEntry = { ...entry, at: now.toISOString() };
     await mkdir(dirname(this.path), { recursive: true });
-    await appendFile(this.path, `${JSON.stringify(full)}\n`, "utf8");
+    // Append AND flush. `appendFile` returns once the bytes are in the page
+    // cache, which survives `kill -9` but not a power loss or a host failure —
+    // and the window this record exists to cover is precisely the one where the
+    // machine stops between writing the intent and submitting the movement.
+    const handle = await open(this.path, "a");
+    try {
+      await handle.writeFile(`${JSON.stringify(full)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     return full;
   }
 

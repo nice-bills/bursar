@@ -40,18 +40,28 @@ Aave's live supply rate was read at the same time and moved on its own between
 reads — 234.30% → 234.37% (testnet rates are arbitrary; the conversion from ray
 is the same one that governs mainnet).
 
+These are **APRs**, not APYs. Aave's `liquidityRate` is the annualised linear
+rate; compounding it would give a materially larger number at rates like these.
+The figure is reported as the protocol reports it.
+
 ## The protocol's rate gates our spending
 
-`yield.minApyBps` is checked against the rate read from Aave immediately before
+`yield.minAprBps` is checked against the rate read from Aave immediately before
 depositing. Supplying into a collapsed rate spends real gas to earn nothing, and
 the rate is knowable beforehand.
 
-The read fails closed. Not knowing what Aave pays is not the same as Aave paying
-enough.
+The read fails closed, in both of the ways it can fail: an unreadable reserve
+refuses, and so does a readable position whose rate cannot be parsed. Not
+knowing what Aave pays is not the same as Aave paying enough — and a floor of
+`0`, which is the default, can never refuse on rate at all, so the gate is only
+as real as the number configured.
 
 ```
 deploy surplus? yes — Aave is paying 234.37%
 ```
+
+(The line above comes from `npm run aave`, which reads the same
+`yield.minAprBps` the plugin does.)
 
 ## The money comes back
 

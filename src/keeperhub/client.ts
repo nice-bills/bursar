@@ -296,8 +296,30 @@ export class KeeperHubClient {
       throw new Error(`Write to ${path} requires an idempotency key`);
     }
 
+    // Serialised once, before the loop. A bigint anywhere in a params object
+    // makes JSON.stringify throw — and inside the loop that TypeError looked
+    // retryable, so it slept through four attempts before surfacing as
+    // something that had nothing to do with the real problem.
+    let payload: string | undefined;
+    if (opts.body !== undefined) {
+      try {
+        payload = JSON.stringify(opts.body);
+      } catch (error) {
+        throw new Error(
+          `Request body for ${method} ${path} could not be serialised: ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    // A deadline for the whole call, not just each attempt. Four attempts plus
+    // backoff plus rate-limiter waits could otherwise run to several minutes
+    // for a request nominally capped at 30 seconds.
+    const overallDeadline = Date.now() + (opts.timeoutMs ?? this.timeoutMs) * this.maxAttempts;
+
     let lastError: unknown;
     for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      if (Date.now() > overallDeadline) break;
       await this.limiter.acquire();
 
       const controller = new AbortController();
@@ -316,7 +338,7 @@ export class KeeperHubClient {
         const response = await fetch(url, {
           method,
           headers,
-          body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+          body: payload,
           signal: controller.signal,
         });
 
@@ -449,13 +471,19 @@ function normalizeExecution(body: unknown): ExecutionResult {
     transactions.push({ hash: single });
   }
 
+  // A "hash" that is not one identifies nothing, and these are rendered as
+  // explorer links and used as settlement proof. `["pending"]` or `["queued"]`
+  // used to sail straight through — the same class of bug as the
+  // "[object Object]" the branch above exists to prevent.
+  const wellFormed = transactions.filter((t) => /^0x[0-9a-fA-F]{64}$/.test(t.hash));
+
   return {
     executionId: String(
       inner.executionId ?? inner.execution_id ?? inner.id ?? raw.executionId ?? "",
     ),
     status: String(inner.status ?? raw.status ?? "unknown"),
-    transactionHashes: transactions.map((t) => t.hash),
-    transactions,
+    transactionHashes: wellFormed.map((t) => t.hash),
+    transactions: wellFormed,
     // The same object-vs-string split as the hashes above. This path was not
     // hardened at the time and `String({url})` produced "[object Object]",
     // which is then printed as the explorer link in every audit surface.

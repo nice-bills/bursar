@@ -29,7 +29,14 @@ import type { WorkflowDefinition } from "../treasury/workflows.js";
 import { WEB3 } from "../treasury/workflows.js";
 
 /** The catalogue slug. Stable for the life of the listing — callers bind to it. */
-export const PREFLIGHT_SLUG = "bursar-payout-preflight";
+/**
+ * The catalogue slug.
+ *
+ * Global across the marketplace, so two operators publishing this listing
+ * collide. `BURSAR_LISTING_SLUG` overrides it for anyone standing up their own.
+ */
+export const PREFLIGHT_SLUG =
+  process.env.BURSAR_LISTING_SLUG ?? "bursar-payout-preflight";
 
 /**
  * Base. KeeperHub settles x402 here, and a listing must name a chain the

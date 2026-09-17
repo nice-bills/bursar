@@ -110,7 +110,7 @@ export {
   shouldDeploy,
   accruedInterest,
   rayToBps,
-  formatApy,
+  formatRate,
   formatHealthFactor,
   aaveAccountDataWorkflow,
   aaveReserveDataWorkflow,

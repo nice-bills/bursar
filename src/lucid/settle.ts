@@ -37,16 +37,26 @@
 
 import { createPublicClient, http as viemHttp } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
-import { baseSepolia, base } from "viem/chains";
+import { baseSepolia } from "viem/chains";
 import { decodePaymentResponseHeader, wrapFetchWithPayment, x402Client } from "@x402/fetch";
 import { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
 
 import { Ledger, dailyPeriod } from "../ledger/store.js";
 import { chainIdFromNetwork, type PaymentPlan } from "./pay.js";
+import type { Movement } from "../policy/engine.js";
 
-/** The chains this payer knows how to sign for. */
+/**
+ * The chains this payer knows how to sign for.
+ *
+ * Testnet only, deliberately. This is a raw key held in an environment
+ * variable; every other movement in this project is signed by KeeperHub's
+ * custodial signer. Base mainnet used to be in this table, which meant a
+ * counterparty quoting `eip155:8453` got a signature against real USDC — on
+ * terms it chose — from a key the documentation calls a testnet key.
+ *
+ * Adding a mainnet chain here is a decision about custody, not a config change.
+ */
 const CHAINS = {
-  8453: base,
   84532: baseSepolia,
 } as const;
 
@@ -102,6 +112,14 @@ export function createPayingFetch(
   plan: PaymentPlan,
   env: NodeJS.ProcessEnv = process.env,
   signed: { attempted: boolean } = { attempted: false },
+  /**
+   * The fetch the paying wrapper sits on top of.
+   *
+   * A seam, not a feature: with `globalThis.fetch` hardcoded there was no way
+   * to exercise a successful settlement, so every test of this function
+   * asserted a guard clause and the code that actually signs was unproven.
+   */
+  baseFetch: typeof globalThis.fetch = globalThis.fetch,
 ): typeof fetch {
   const key = env.BURSAR_PAYER_PRIVATE_KEY;
   if (!key) {
@@ -133,7 +151,7 @@ export function createPayingFetch(
     new ExactEvmScheme(toClientEvmSigner(account, reader)),
   );
 
-  return wrapFetchWithPayment(guardChallenge(globalThis.fetch, plan, signed), client);
+  return wrapFetchWithPayment(guardChallenge(baseFetch, plan, signed), client);
 }
 
 /** Fields of a single x402 offer, however the issuer spelled them. */
@@ -288,6 +306,18 @@ export async function settle(
   request: { url: string; input: Record<string, unknown> },
   ledger: Ledger,
   env: NodeJS.ProcessEnv = process.env,
+  /**
+   * Re-checked immediately before paying, under the ledger's lock.
+   *
+   * `planPayment` reads the caps and `settle` writes the movement, and anything
+   * can happen in between — including another invoice doing the same thing.
+   * Without this, two concurrent invoices each saw room under the daily cap and
+   * both paid. Optional so existing callers keep working, but a caller that can
+   * pay concurrently should pass it.
+   */
+  recheck?: { evaluate: (movement: Movement) => Promise<{ verdict: string; reason?: string }> },
+  /** Injectable transport, so the paid path can be tested. See `createPayingFetch`. */
+  baseFetch: typeof globalThis.fetch = globalThis.fetch,
 ): Promise<SettlementResult> {
   if (plan.outcome !== "pay") {
     throw new SettlementError(
@@ -318,10 +348,33 @@ export async function settle(
   // intent for a payment that was never tried is a phantom for reconcile to
   // chase against a chain where it cannot possibly appear.
   const signed = { attempted: false };
-  const payingFetch = createPayingFetch(plan.chainId, plan, env, signed);
+  const payingFetch = createPayingFetch(plan.chainId, plan, env, signed, baseFetch);
 
-  // Written before anything is signed.
-  await ledger.append({ ...entry, status: "intent" });
+  // Written before anything is signed — and, with the re-check, under the same
+  // lock every other movement takes, so the intent that consumes the cap is
+  // durable before the next caller reads it.
+  const blocked = await ledger.serialize(async () => {
+    if (recheck) {
+      const decision = await recheck.evaluate({
+        leg: "purchase",
+        chainId: plan.chainId!,
+        to: plan.payTo!,
+        amount: plan.amount!,
+        token: plan.asset!,
+        decimals: plan.decimals ?? 6,
+        memo: entry.memo,
+      });
+      if (decision.verdict !== "allow") {
+        return decision.reason ?? "policy refused the invoice at payment time";
+      }
+    }
+    await ledger.append({ ...entry, status: "intent" });
+    return null;
+  });
+
+  if (blocked) {
+    return { paid: false, output: null, error: blocked };
+  }
 
   try {
     const response = await payingFetch(request.url, {

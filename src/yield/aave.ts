@@ -92,13 +92,20 @@ export interface AaveReserveData {
  * Ray is 27 decimals and a basis point is 1/10000, so the conversion is a
  * division by 1e23. Done in integers and rounded down: a yield gate that
  * rounds up would deploy into a rate that does not clear it.
+ *
+ * This is an APR, not an APY. Aave's `liquidityRate` is the annualised LINEAR
+ * rate; compounding it would be
+ * `(1 + r / SECONDS_PER_YEAR) ** SECONDS_PER_YEAR - 1`, which at high rates is
+ * several times larger. Everything here was named "apy" once, which understated
+ * nothing but described the wrong quantity — the gate is monotone either way,
+ * so it worked while reporting a figure under the wrong label.
  */
 export function rayToBps(ray: bigint): bigint {
   return ray / (RAY / 10_000n);
 }
 
-/** Render a ray rate as a percentage, for humans. */
-export function formatApy(ray: bigint): string {
+/** Render a ray rate as a percentage, for humans. Linear (APR), not compounded. */
+export function formatRate(ray: bigint): string {
   const bps = rayToBps(ray);
   return `${(Number(bps) / 100).toFixed(2)}%`;
 }
@@ -127,15 +134,31 @@ function unwrap(output: unknown): Record<string, unknown> | null {
   return o;
 }
 
+/**
+ * Read an on-chain integer from whatever shape the wire used.
+ *
+ * Deliberately narrow. Two earlier conveniences here were worse than refusing:
+ *
+ *   - a JSON number was truncated with `Math.trunc`, but an 18-decimal balance
+ *     exceeds 2^53, so the double had already lost precision before `BigInt`
+ *     ever saw it — a silently wrong balance rather than a rejected one;
+ *   - a decimal string like "5.165…" had its integer part taken, turning a
+ *     whole-unit reading into 5 wei and reporting it as a successful read.
+ *
+ * Both are now null. A reading we cannot trust exactly is one the caller must
+ * decide about, and every caller here fails closed.
+ */
 function toBigInt(value: unknown): bigint | null {
   if (typeof value === "bigint") return value;
-  if (typeof value === "number" && Number.isFinite(value)) return BigInt(Math.trunc(value));
+  if (typeof value === "number") {
+    // Only integers small enough to have survived JSON intact.
+    return Number.isSafeInteger(value) ? BigInt(value) : null;
+  }
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (/^\d+$/.test(trimmed)) return BigInt(trimmed);
-    // Some readings arrive as decimal strings; take the integer part rather
-    // than throwing away the whole reading.
-    if (/^\d+\.\d+$/.test(trimmed)) return BigInt(trimmed.split(".")[0]!);
+    // Hex is how some nodes encode a uint256.
+    if (/^0x[0-9a-fA-F]+$/.test(trimmed)) return BigInt(trimmed);
   }
   return null;
 }
@@ -205,7 +228,7 @@ export function readReserveData(output: unknown): AaveReserveData | null {
 export interface YieldDecision {
   deploy: boolean;
   reason: string;
-  apyBps: bigint;
+  aprBps: bigint;
 }
 
 export function shouldDeploy(
@@ -214,7 +237,7 @@ export function shouldDeploy(
 ): YieldDecision {
   if (!reserve) {
     // Fail closed. Not knowing the rate is not the same as the rate being fine.
-    return { deploy: false, reason: "Aave's reserve data could not be read", apyBps: 0n };
+    return { deploy: false, reason: "Aave's reserve data could not be read", aprBps: 0n };
   }
 
   if (reserve.liquidityRateRay === undefined) {
@@ -223,25 +246,25 @@ export function shouldDeploy(
     return {
       deploy: false,
       reason: "Aave's supply rate could not be read from the reserve data",
-      apyBps: 0n,
+      aprBps: 0n,
     };
   }
 
-  const apyBps = rayToBps(reserve.liquidityRateRay);
-  if (apyBps < minApyBps) {
+  const aprBps = rayToBps(reserve.liquidityRateRay);
+  if (aprBps < minApyBps) {
     return {
       deploy: false,
       reason:
-        `Aave is paying ${formatApy(reserve.liquidityRateRay)} on this reserve, ` +
+        `Aave is paying ${formatRate(reserve.liquidityRateRay)} on this reserve, ` +
         `below the ${(Number(minApyBps) / 100).toFixed(2)}% floor`,
-      apyBps,
+      aprBps,
     };
   }
 
   return {
     deploy: true,
-    reason: `Aave is paying ${formatApy(reserve.liquidityRateRay)}`,
-    apyBps,
+    reason: `Aave is paying ${formatRate(reserve.liquidityRateRay)}`,
+    aprBps,
   };
 }
 
@@ -257,9 +280,18 @@ export function shouldDeploy(
  * accounted for, most likely), and reporting a negative yield would be
  * inventing a loss that did not happen.
  */
-export function accruedInterest(reserve: AaveReserveData, suppliedPrincipal: bigint): bigint {
+export function accruedInterest(
+  reserve: AaveReserveData,
+  suppliedPrincipal: bigint,
+): { interest: bigint; principalIsStale: boolean } {
   const delta = reserve.currentATokenBalance - suppliedPrincipal;
-  return delta > 0n ? delta : 0n;
+  // A negative delta does not mean a loss — it means the recorded principal is
+  // higher than the position, which happens as soon as anything is withdrawn,
+  // because withdrawals are not ledger movements. Clamping it to zero quietly
+  // reported "0 interest" on a position that had earned plenty. Say so instead.
+  return delta > 0n
+    ? { interest: delta, principalIsStale: false }
+    : { interest: 0n, principalIsStale: delta < 0n };
 }
 
 // --- workflows -------------------------------------------------------------
@@ -384,7 +416,7 @@ export function aaveRateKeeperWorkflow(
     name: `Bursar Aave Rate Keeper ${symbol} — chain ${chainId}`,
     description:
       `Watch Aave v3's ${symbol} supply rate on chain ${chainId}. If it falls below ` +
-      `${formatApy(minRateRay)}, withdraw ${withdrawBaseUnits} base units back to ${user}. ` +
+      `${formatRate(minRateRay)}, withdraw ${withdrawBaseUnits} base units back to ${user}. ` +
       `Runs on KeeperHub's schedule, so it reacts while the agent is down. ` +
       `Authored by plugin-bursar.`,
     nodes: [

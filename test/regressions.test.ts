@@ -402,3 +402,236 @@ describe("amounts an LLM writes", () => {
     assert.equal(amountOf("distribute 0.01 ETH"), 10000000000000000n);
   });
 });
+
+describe("the rolling 24h window actually rolls", () => {
+  test("a movement older than the window stops counting against the cap", async () => {
+    // `append` stamps `at` itself, so before the clock seam existed there was
+    // no way to construct an aged ledger — the mechanism by which a daily cap
+    // resets was unreachable from the public API and had no test at all.
+    await withExecutor(
+      { maxPerTransfer: "1000", maxPerDay: "1000", allowlist: [`0x${"9".repeat(40)}`] },
+      async ({ executor, ledger }) => {
+        const yesterday = new Date(Date.now() - 25 * 60 * 60 * 1000);
+        await ledger.append(
+          {
+            intentId: "spent-yesterday",
+            leg: "payout",
+            chainId: 11155111,
+            to: `0x${"9".repeat(40)}`,
+            amount: "1000",
+            token: null,
+            decimals: 18,
+            memo: "yesterday's payout",
+            submission: { kind: "transfer" },
+            status: "confirmed",
+            transactionHashes: [`0x${"1".repeat(64)}`],
+          },
+          yesterday,
+        );
+
+        // Yesterday's spend filled the cap. Today's must still go through.
+        const outcome = await executor.move(payout(`0x${"9".repeat(40)}`, "1000"), "today");
+        assert.equal(
+          outcome.result,
+          "confirmed",
+          `a 25-hour-old movement must not consume today's budget: ${JSON.stringify(outcome)}`,
+        );
+      },
+    );
+  });
+
+  test("a movement inside the window still counts", async () => {
+    await withExecutor(
+      { maxPerTransfer: "1000", maxPerDay: "1000", allowlist: [`0x${"9".repeat(40)}`] },
+      async ({ executor, ledger }) => {
+        await ledger.append(
+          {
+            intentId: "spent-an-hour-ago",
+            leg: "payout",
+            chainId: 11155111,
+            to: `0x${"9".repeat(40)}`,
+            amount: "1000",
+            token: null,
+            decimals: 18,
+            memo: "recent payout",
+            submission: { kind: "transfer" },
+            status: "confirmed",
+            transactionHashes: [`0x${"2".repeat(64)}`],
+          },
+          new Date(Date.now() - 60 * 60 * 1000),
+        );
+
+        const outcome = await executor.move(payout(`0x${"9".repeat(40)}`, "1000"), "today");
+        assert.equal(outcome.result, "blocked");
+      },
+    );
+  });
+});
+
+describe("splitByShares hands the remainder to the largest holder", () => {
+  test("even when the largest holder is not first", async () => {
+    // The existing fixture puts the largest share at index 0, so an
+    // implementation that simply did `allocations[0] += remainder` passed it.
+    // Here the largest is last, and the amount does not divide cleanly.
+    const { splitByShares } = await import("../src/config.js");
+    const holders = [
+      { name: "small", address: `0x${"1".repeat(40)}`, shareBps: 2000 },
+      { name: "medium", address: `0x${"2".repeat(40)}`, shareBps: 3000 },
+      { name: "large", address: `0x${"3".repeat(40)}`, shareBps: 5000 },
+    ];
+
+    const split = splitByShares(11n, holders);
+    assert.equal(
+      split.reduce((sum, a) => sum + a.amount, 0n),
+      11n,
+      "every wei must be allocated, remainder included",
+    );
+
+    const biggest = split.reduce((a, b) => (b.amount > a.amount ? b : a));
+    assert.equal(
+      biggest.contributor.name,
+      "large",
+      "the remainder goes to the largest shareholder, not to the first",
+    );
+  });
+
+  test("allocates every wei even when no one can be paid a whole unit", async () => {
+    const { splitByShares } = await import("../src/config.js");
+    const split = splitByShares(3n, [
+      { name: "a", address: `0x${"1".repeat(40)}`, shareBps: 2500 },
+      { name: "b", address: `0x${"2".repeat(40)}`, shareBps: 2500 },
+      { name: "c", address: `0x${"3".repeat(40)}`, shareBps: 2500 },
+      { name: "d", address: `0x${"4".repeat(40)}`, shareBps: 2500 },
+    ]);
+    assert.equal(split.reduce((sum, a) => sum + a.amount, 0n), 3n);
+  });
+});
+
+describe("settlement pays the approved invoice, or nothing", () => {
+  const PAYER = `0x${"1".repeat(64)}`;
+  const ASSET = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+  const PAYEE = `0x${"b".repeat(40)}`;
+
+  const plan = {
+    outcome: "pay" as const,
+    reason: "within policy",
+    amount: "10000",
+    asset: ASSET,
+    payTo: PAYEE,
+    chainId: 84532,
+    decimals: 6,
+    intentId: "invoice-1",
+    priced: "0.01 USDC",
+  };
+
+  const challenge = (over: Record<string, unknown> = {}) =>
+    JSON.stringify({
+      accepts: [
+        {
+          scheme: "exact",
+          network: "eip155:84532",
+          maxAmountRequired: "10000",
+          asset: ASSET,
+          payTo: PAYEE,
+          resource: "https://agent.example/entrypoints/check/invoke",
+          maxTimeoutSeconds: 60,
+          ...over,
+        },
+      ],
+    });
+
+  async function withLedger<T>(fn: (ledger: Ledger) => Promise<T>): Promise<T> {
+    const dir = await mkdtemp(join(tmpdir(), "bursar-settle-"));
+    try {
+      return await fn(new Ledger(join(dir, "ledger.jsonl")));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("a re-quote with different terms is refused, and nothing is recorded as paid", async () => {
+    // The paying wrapper issues its OWN unpaid request and signs whatever 402
+    // comes back from that — so the terms policy approved are not automatically
+    // the terms that get signed. This is the whole reason the guard exists.
+    await withLedger(async (ledger) => {
+      const { settle } = await import("../src/lucid/settle.js");
+
+      const hostile: typeof globalThis.fetch = async () =>
+        new Response(challenge({ maxAmountRequired: "990000", payTo: `0x${"c".repeat(40)}` }), {
+          status: 402,
+          headers: { "content-type": "application/json" },
+        });
+
+      const result = await settle(
+        plan,
+        { url: "https://agent.example/entrypoints/check/invoke", input: {} },
+        ledger,
+        { BURSAR_PAYER_PRIVATE_KEY: PAYER } as never,
+        undefined,
+        hostile,
+      );
+
+      assert.equal(result.paid, false);
+      assert.match(result.error ?? "", /changed between approval and payment/);
+
+      const entries = [...(await ledger.latestByIntent()).values()];
+      assert.equal(entries.length, 1);
+      assert.notEqual(entries[0]?.status, "confirmed", "a refused invoice is never confirmed");
+    });
+  });
+
+  test("an entrypoint that answers 200 without ever charging is recorded as confirmed", async () => {
+    await withLedger(async (ledger) => {
+      const { settle } = await import("../src/lucid/settle.js");
+
+      const free: typeof globalThis.fetch = async () =>
+        new Response(JSON.stringify({ output: { ok: true } }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+
+      const result = await settle(
+        plan,
+        { url: "https://agent.example/entrypoints/check/invoke", input: {} },
+        ledger,
+        { BURSAR_PAYER_PRIVATE_KEY: PAYER } as never,
+        undefined,
+        free,
+      );
+
+      assert.equal(result.paid, true);
+      assert.deepEqual(result.output, { ok: true });
+
+      const entry = [...(await ledger.latestByIntent()).values()][0];
+      assert.equal(entry?.status, "confirmed");
+    });
+  });
+
+  test("a policy re-check at payment time stops the payment and records nothing new", async () => {
+    // planPayment reads the caps; settle writes the movement. Anything can
+    // happen in between — including another invoice doing the same thing.
+    await withLedger(async (ledger) => {
+      const { settle } = await import("../src/lucid/settle.js");
+
+      let called = false;
+      const never: typeof globalThis.fetch = async () => {
+        called = true;
+        return new Response("{}", { status: 200 });
+      };
+
+      const result = await settle(
+        plan,
+        { url: "https://agent.example/entrypoints/check/invoke", input: {} },
+        ledger,
+        { BURSAR_PAYER_PRIVATE_KEY: PAYER } as never,
+        { evaluate: async () => ({ verdict: "deny", reason: "daily cap reached" }) },
+        never,
+      );
+
+      assert.equal(result.paid, false);
+      assert.match(result.error ?? "", /daily cap reached/);
+      assert.equal(called, false, "nothing may be sent once the re-check refuses");
+      assert.equal((await ledger.latestByIntent()).size, 0, "no intent is written either");
+    });
+  });
+});

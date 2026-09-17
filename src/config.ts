@@ -38,6 +38,26 @@ const address = z
 /** Base units as a decimal string — never a JS number, which loses precision. */
 const baseUnits = z.string().regex(/^\d+$/, "must be an integer string in base units");
 
+/**
+ * Read base units for a cross-field comparison, without throwing.
+ *
+ * `superRefine` still runs when a field-level regex has already failed, so
+ * `BigInt("1.5")` here threw a raw SyntaxError straight out of `safeParse` —
+ * escaping `loadConfig`'s error formatting and suppressing every other issue in
+ * the file. A value that did not parse has already been reported; this returns
+ * null so the comparison simply stands aside.
+ */
+function asBaseUnits(value: string): bigint | null {
+  return /^\d+$/.test(value) ? BigInt(value) : null;
+}
+
+/** True only when both sides parsed and the comparison genuinely holds. */
+function bothParse(a: string, b: string): [bigint, bigint] | null {
+  const left = asBaseUnits(a);
+  const right = asBaseUnits(b);
+  return left === null || right === null ? null : [left, right];
+}
+
 const contributorSchema = z.object({
   name: z.string().min(1),
   address,
@@ -79,11 +99,22 @@ const yieldSchema = z.object({
    * gas to earn nothing, and the rate is knowable beforehand — so we look, and
    * decline if it does not clear.
    *
-   * Defaults to 0, which supplies at any rate and preserves the behaviour of
-   * configs written before this existed.
+   * A basis-point floor on Aave's APR — the annualised linear rate the protocol
+   * reports — not on a compounded APY. `minApyBps` is accepted as a deprecated
+   * spelling of the same field, because that is what it was called when it
+   * described the wrong quantity.
+   *
+   * Defaults to 0, which supplies at ANY rate: a floor of zero can never
+   * refuse, so the gate is only as real as the number configured here. Set it
+   * deliberately.
    */
-  minApyBps: z.number().int().nonnegative().default(0),
-});
+  minAprBps: z.number().int().nonnegative().optional(),
+  /** @deprecated Use `minAprBps`. Kept so existing configs keep loading. */
+  minApyBps: z.number().int().nonnegative().optional(),
+}).transform((y) => ({
+  ...y,
+  minAprBps: y.minAprBps ?? y.minApyBps ?? 0,
+}));
 
 /**
  * Limits for one non-native asset.
@@ -227,7 +258,8 @@ export const configSchema = z
     }
 
     for (const f of cfg.float) {
-      if (BigInt(f.targetBalance) <= BigInt(f.minBalance)) {
+      const pair = bothParse(f.targetBalance, f.minBalance);
+      if (pair && pair[0] <= pair[1]) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["float"],
@@ -236,7 +268,8 @@ export const configSchema = z
       }
     }
 
-    if (BigInt(cfg.policy.maxPerTransfer) > BigInt(cfg.policy.maxPerDay)) {
+    const caps = bothParse(cfg.policy.maxPerTransfer, cfg.policy.maxPerDay);
+    if (caps && caps[0] > caps[1]) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["policy"],
@@ -266,7 +299,8 @@ export const configSchema = z
     }
 
     for (const [token, asset] of Object.entries(cfg.policy.assets)) {
-      if (BigInt(asset.maxPerTransfer) > BigInt(asset.maxPerDay)) {
+      const assetCaps = bothParse(asset.maxPerTransfer, asset.maxPerDay);
+      if (assetCaps && assetCaps[0] > assetCaps[1]) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["policy", "assets", token],

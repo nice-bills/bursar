@@ -138,6 +138,18 @@ async function main(): Promise<void> {
   rule("4. POLICY — what Bursar makes of that bill");
   const config = await loadConfig(process.env.BURSAR_CONFIG_PATH ?? "bursar.config.json");
   const ledger = new Ledger(process.env.BURSAR_LEDGER_PATH ?? "data/ledger.jsonl");
+  // The service holds this lock for its whole life; a script writing the
+  // same file has to take it too, or the two interleave appends and each
+  // reads the caps before the other writes.
+  await ledger.acquire();
+  // Release on every exit path. A lock left behind by a crashed script is
+  // taken over as stale eventually, but not before it has refused a run.
+  const releaseLock = () => void ledger.release();
+  process.once("exit", releaseLock);
+  process.once("SIGINT", () => {
+    releaseLock();
+    process.exit(130);
+  });
 
   // The platform cap and price feeds are read the same way every other movement
   // reads them, so this decision is not a special case with softer rules.
@@ -209,6 +221,9 @@ async function main(): Promise<void> {
       input: { address: "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9" },
     },
     ledger,
+    process.env,
+    // Re-checked at the moment of payment, not just at the moment of quoting.
+    policy,
   );
 
   if (result.paid) {

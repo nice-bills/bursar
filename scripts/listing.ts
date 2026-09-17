@@ -110,15 +110,29 @@ async function main(): Promise<void> {
     // setting it before the listing exists is the only order that works on a
     // first publish, and re-running this on an already-listed workflow would
     // need the unlist step.
-    const priced = await mcp.updateWorkflowListing({
-      workflowId,
-      priceUsdcPerCall: PRICE_USDC,
-      category: "defi",
-      chain: PREFLIGHT_CHAIN,
-      workflowType: "read",
-      inputSchema: PREFLIGHT_INPUT_SCHEMA as unknown as Record<string, unknown>,
-      outputMapping: PREFLIGHT_OUTPUT_MAPPING as unknown as Record<string, unknown>,
-    });
+    let priced: unknown;
+    try {
+      priced = await mcp.updateWorkflowListing({
+        workflowId,
+        priceUsdcPerCall: PRICE_USDC,
+        category: "defi",
+        chain: PREFLIGHT_CHAIN,
+        workflowType: "read",
+        inputSchema: PREFLIGHT_INPUT_SCHEMA as unknown as Record<string, unknown>,
+        outputMapping: PREFLIGHT_OUTPUT_MAPPING as unknown as Record<string, unknown>,
+      });
+    } catch (error) {
+      // The workflow definition has already been updated at this point. Say so,
+      // and say what to do — the failure mode this comment predicted used to
+      // leave the operator with a half-applied publish and a raw stack trace.
+      console.error(
+        `\n✗ The workflow was updated, but pricing it failed.\n` +
+          `  ${error instanceof Error ? error.message : String(error)}\n\n` +
+          `  If it is already listed, the platform refuses a price change in place.\n` +
+          `  Unlist it at https://app.keeperhub.com/workflows/${workflowId}, then re-run.`,
+      );
+      process.exit(1);
+    }
     show(`priced at $${PRICE_USDC}/call`, priced, 600);
 
     const listed = await mcp.listWorkflow({

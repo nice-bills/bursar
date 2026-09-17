@@ -52,8 +52,6 @@ export type MoveOutcome =
   | { result: "held"; intentId: string; reason: string; entry: LedgerEntry };
 
 /**
- * Serialises the policy-check-then-record section.
- *
  * A daily cap is a serial invariant: two movements that each read the ledger
  * before either writes will both see room under the cap and both proceed. That
  * is a real double-spend, not a theoretical one — ElizaOS dispatches actions
@@ -63,22 +61,12 @@ export type MoveOutcome =
  * durable before the next caller evaluates policy. Payouts therefore execute
  * one at a time. For a treasury that is the correct trade: throughput is worth
  * nothing if the balance is wrong.
+ *
+ * The lock belongs to the Ledger (`ledger.serialize`) rather than to this
+ * class, so that the x402 purchase path — which records movements without
+ * going through the Executor — contends for the same lock instead of racing it.
  */
-class Mutex {
-  private tail: Promise<unknown> = Promise.resolve();
-
-  run<T>(fn: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(fn, fn);
-    // Keep the chain alive even when a caller rejects, or one failure would
-    // poison every movement that follows it.
-    this.tail = result.catch(() => undefined);
-    return result;
-  }
-}
-
 export class Executor {
-  private readonly mutex = new Mutex();
-
   constructor(
     private readonly client: KeeperHubClient,
     private readonly ledger: Ledger,
@@ -99,7 +87,7 @@ export class Executor {
     nonce?: string,
     route?: SubmissionRoute,
   ): Promise<MoveOutcome> {
-    return this.mutex.run(() => this.moveExclusive(movement, period, nonce, route));
+    return this.ledger.serialize(() => this.moveExclusive(movement, period, nonce, route));
   }
 
   /** Turn a recorded route back into the call that performs it. */
@@ -226,6 +214,27 @@ export class Executor {
           : submitted;
 
       if (isSuccess(final.status)) {
+        // A success carrying no transaction hash is not proof anything moved —
+        // a gated workflow reports the same status when its condition is false.
+        // Recording that as confirmed consumes the daily cap and makes the
+        // intent permanently `skipped` on retry, for a movement that never
+        // happened. Leave it open for reconcile to settle against the chain.
+        if (final.transactionHashes.length === 0) {
+          const entry = await this.ledger.append({
+            ...base,
+            status: "submitted",
+            executionId,
+            error:
+              `execution ${final.status} but reported no transaction hash, so whether it ` +
+              `moved is unknown. Run reconcile before moving more value.`,
+          });
+          return {
+            result: "failed",
+            entry,
+            error: `${final.status} with no transaction hash — unresolved`,
+          };
+        }
+
         const entry = await this.ledger.append({
           ...base,
           status: "confirmed",
@@ -276,7 +285,7 @@ export class Executor {
    * crash between deciding and sending, exactly as the intent does.
    */
   async approve(intentId: string, decidedBy: string): Promise<MoveOutcome> {
-    return this.mutex.run(async () => {
+    return this.ledger.serialize(async () => {
       const held = (await this.ledger.latestByIntent()).get(intentId);
       if (!held || held.status !== "awaiting_approval") {
         return {
@@ -323,10 +332,37 @@ export class Executor {
    * and lets the decline land after the approval has already submitted.
    */
   async decline(intentId: string, decidedBy: string): Promise<boolean> {
-    return this.mutex.run(async () => {
+    return this.ledger.serialize(async () => {
       const held = (await this.ledger.latestByIntent()).get(intentId);
       if (!held || held.status !== "awaiting_approval") return false;
       await this.ledger.append({ ...held, status: "declined", decidedBy });
+      return true;
+    });
+  }
+
+  /**
+   * Give up on an intent that cannot be resolved, on a person's say-so.
+   *
+   * `reconcile()` can only close what it can replay. An intent whose submission
+   * keeps failing for a reason replaying will not change — a revoked key, a bad
+   * token address, an x402 payee that no longer exists — otherwise stays open
+   * forever, and an open intent blocks every movement on its chain. Without
+   * this the only way out was editing the JSONL by hand.
+   *
+   * It records a decision, it does not assert an outcome: check the chain
+   * before calling it.
+   */
+  async abandon(intentId: string, decidedBy: string, reason: string): Promise<boolean> {
+    return this.ledger.serialize(async () => {
+      const entry = (await this.ledger.latestByIntent()).get(intentId);
+      if (!entry) return false;
+      if (entry.status !== "intent" && entry.status !== "submitted") return false;
+      await this.ledger.append({
+        ...entry,
+        status: "abandoned",
+        decidedBy,
+        error: `abandoned: ${reason}`,
+      });
       return true;
     });
   }
@@ -349,7 +385,7 @@ export class Executor {
    * state from which it is safe to move more money.
    */
   reconcile(): Promise<{ resolved: number; stillOpen: number; details: string[] }> {
-    return this.mutex.run(() => this.reconcileExclusive());
+    return this.ledger.serialize(() => this.reconcileExclusive());
   }
 
   private async reconcileExclusive(): Promise<{
@@ -371,7 +407,8 @@ export class Executor {
       if (route.kind === "x402") {
         details.push(
           `${entry.intentId}: still open — paid over x402 to ${route.url}, which cannot be ` +
-            `replayed safely. Check the payee's records and close it by hand.`,
+            `replayed safely. Check the payee's records, then close it with ` +
+            `abandon("${entry.intentId}", ...).`,
         );
         continue;
       }

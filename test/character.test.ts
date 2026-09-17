@@ -1,12 +1,15 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
 
 import { validateCharacter } from "@elizaos/core";
 
 import { treasuryActions } from "../src/eliza/actions.js";
 
-const PATH = "character/treasurer.character.json";
+// Resolved from this file, not from the cwd: a cwd-relative path breaks the
+// moment the runner is invoked from anywhere but the repo root.
+const PATH = fileURLToPath(new URL("../character/treasurer.character.json", import.meta.url));
 
 async function loadRaw(): Promise<Record<string, unknown>> {
   return JSON.parse(await readFile(PATH, "utf8")) as Record<string, unknown>;

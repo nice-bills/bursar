@@ -36,6 +36,11 @@ jobs:
       - name: Typecheck (src, scripts and tests)
         run: npx tsc -p tsconfig.json --noEmit
 
+      - name: Relative imports carry their extension
+        # moduleResolution "Bundler" accepts an extensionless specifier that
+        # then fails at runtime in the published raw-ESM package.
+        run: npm run check:imports
+
       - name: Test
         run: npm test
 
@@ -56,3 +61,7 @@ jobs:
 
       - name: Verify the package contents
         run: npm pack --dry-run
+
+      - name: Typecheck the example counterparty agent
+        working-directory: examples/lucid-agent
+        run: npm install --no-audit --no-fund && npm run typecheck

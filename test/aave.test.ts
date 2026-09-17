@@ -5,7 +5,7 @@ import {
   readAccountData,
   readReserveData,
   rayToBps,
-  formatApy,
+  formatRate,
   formatHealthFactor,
   accruedInterest,
   shouldDeploy,
@@ -112,13 +112,13 @@ describe("rate arithmetic", () => {
     // The captured rate is ~234.31% — a testnet number, but the conversion is
     // the same one that governs mainnet.
     assert.equal(rayToBps(2_343_085_982_982_455_170_535_563_143n), 23_430n);
-    assert.equal(formatApy(2_343_085_982_982_455_170_535_563_143n), "234.30%");
+    assert.equal(formatRate(2_343_085_982_982_455_170_535_563_143n), "234.30%");
   });
 
   test("a whole-percent rate converts exactly", () => {
     // 5% APY in ray.
     assert.equal(rayToBps(5n * 10n ** 25n), 500n);
-    assert.equal(formatApy(5n * 10n ** 25n), "5.00%");
+    assert.equal(formatRate(5n * 10n ** 25n), "5.00%");
   });
 
   test("rounds down rather than up, so a gate is never cleared by rounding", () => {
@@ -129,7 +129,7 @@ describe("rate arithmetic", () => {
 
   test("a zero rate is zero", () => {
     assert.equal(rayToBps(0n), 0n);
-    assert.equal(formatApy(0n), "0.00%");
+    assert.equal(formatRate(0n), "0.00%");
   });
 });
 
@@ -166,15 +166,30 @@ describe("accrued interest", () => {
   test("is the aToken balance above what was supplied", () => {
     const reserve = readReserveData(RESERVE_OUTPUT)!;
     const principal = 5_000_000_000_000_000_000n; // 5 LINK supplied
-    assert.equal(accruedInterest(reserve, principal), 165_120_505_432_263_390n);
+    assert.deepEqual(accruedInterest(reserve, principal), {
+      interest: 165_120_505_432_263_390n,
+      principalIsStale: false,
+    });
   });
 
-  test("never reports a loss that cannot happen", () => {
+  test("never reports a loss that cannot happen, and says the principal is stale", () => {
     // aToken balances do not shrink on their own. A negative here means the
     // principal figure is wrong — most likely an unaccounted withdrawal — and
-    // inventing a loss would be worse than reporting nothing earned.
+    // inventing a loss would be worse than reporting nothing earned. But
+    // reporting a flat zero hid the staleness, so the caller is now told.
     const reserve = readReserveData(RESERVE_OUTPUT)!;
-    assert.equal(accruedInterest(reserve, 9n * 10n ** 18n), 0n);
+    assert.deepEqual(accruedInterest(reserve, 9n * 10n ** 18n), {
+      interest: 0n,
+      principalIsStale: true,
+    });
+  });
+
+  test("an exactly-matching principal is not stale", () => {
+    const reserve = readReserveData(RESERVE_OUTPUT)!;
+    assert.deepEqual(accruedInterest(reserve, reserve.currentATokenBalance), {
+      interest: 0n,
+      principalIsStale: false,
+    });
   });
 });
 

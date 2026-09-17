@@ -127,14 +127,14 @@ describe("execution payloads from both surfaces", () => {
     const workflowShape = {
       status: "success",
       transactionHashes: [
-        { hash: "0xabc", gasUsed: "228491", blockNumber: 11672920, receiptStatus: "success" },
+        { hash: "0xabababababababababababababababababababababababababababababababab", gasUsed: "228491", blockNumber: 11672920, receiptStatus: "success" },
       ],
     };
-    const directShape = { status: "completed", transactionHash: "0xdef" };
+    const directShape = { status: "completed", transactionHash: "0xdededededededededededededededededededededededededededededededede" };
 
     for (const [payload, expected] of [
-      [workflowShape, "0xabc"],
-      [directShape, "0xdef"],
+      [workflowShape, "0xabababababababababababababababababababababababababababababababab"],
+      [directShape, "0xdededededededededededededededededededededededededededededededede"],
     ] as const) {
       const originalFetch = globalThis.fetch;
       globalThis.fetch = (async () =>
@@ -155,6 +155,9 @@ describe("execution payloads from both surfaces", () => {
     }
   });
 
+  // The hashes below are full 32-byte values on purpose: `normalizeExecution`
+  // drops anything that is not one, so a short placeholder would be filtered
+  // out and the test would be asserting against the filter, not the parser.
   test("workflow receipts keep their gas and block metadata", async () => {
     const { KeeperHubClient } = await import("../src/keeperhub/client.js");
     const client = new KeeperHubClient({ apiKey: "kh_test", baseUrl: "http://127.0.0.1:1" });
@@ -164,7 +167,7 @@ describe("execution payloads from both surfaces", () => {
         JSON.stringify({
           status: "success",
           transactionHashes: [
-            { hash: "0xabc", gasUsed: "228491", blockNumber: 11672920, verified: true },
+            { hash: "0xabababababababababababababababababababababababababababababababab", gasUsed: "228491", blockNumber: 11672920, verified: true },
           ],
         }),
         { status: 200, headers: { "content-type": "application/json" } },

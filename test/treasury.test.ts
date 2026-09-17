@@ -183,11 +183,18 @@ describe("PolicyEngine", () => {
   test("counts in-flight movements against the daily cap", async () => {
     await withLedger(async (ledger) => {
       // Submitted but unconfirmed: the money may already be gone.
+      //
+      // The assertion below names the daily cap specifically. It used to accept
+      // /maxPerDay|unreconciled/, and an open intent denies this movement on the
+      // open-intent gate too — so if `submitted` were ever moved into NOT_SPENT
+      // (i.e. in-flight movements stopped counting), the alternation would still
+      // have gone green on the other branch. The test could not fail for the
+      // reason its name gives.
       await ledger.append({
         intentId: "prior",
         status: "submitted",
         leg: "payout",
-        chainId: 11155111,
+        chainId: movement.chainId,
         to: contributors[1]!.address,
         amount: "1800",
         token: null,
@@ -197,7 +204,11 @@ describe("PolicyEngine", () => {
 
       const decision = await new PolicyEngine(config, ledger).evaluate(movement);
       assert.equal(decision.verdict, "deny");
-      assert.match((decision as { reason: string }).reason, /maxPerDay|unreconciled/);
+      assert.match(
+        (decision as { reason: string }).reason,
+        /maxPerDay/,
+        "must be refused by the daily cap, not merely by the open-intent gate",
+      );
     });
   });
 

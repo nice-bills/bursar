@@ -385,7 +385,21 @@ BURSAR_APPROVER=<entity id>             # required to release a held movement
 `BURSAR_APPROVER` is the id of the person allowed to approve or decline a held
 payment. Without it `REVIEW_PENDING` will list what is waiting but refuse to
 release anything — an approval gate that anyone in the room can satisfy is not
-a gate.
+a gate. A decision must also name its movement by the eight characters shown,
+so a stray "yes" in an unrelated sentence cannot release a payment.
+
+### When an intent cannot be reconciled
+
+`RECONCILE_TREASURY` resolves an open intent by replaying it under its original
+idempotency key, which is safe precisely because the server answers a
+recognised key with the original execution rather than a second one. Two kinds
+of movement cannot be resolved that way and are reported instead: an x402
+purchase, which was paid from the payer key and which KeeperHub has never seen,
+and anything whose submission keeps failing for a reason replaying will not
+change. Since an open intent blocks every movement on its chain, there is an
+explicit way out — `service.abandon(intentId, who, reason)` records the decision
+to stop chasing it. Check the chain first; it closes the intent, it does not
+assert what happened.
 
 Your agent gains seven actions — `PAY_CONTRIBUTORS`, `SWEEP_EARNINGS`,
 `DEPLOY_SURPLUS`, `CHECK_GAS_FLOAT`, `RECONCILE_TREASURY`, `REVIEW_PENDING`,

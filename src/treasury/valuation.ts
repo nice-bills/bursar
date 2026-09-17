@@ -110,8 +110,19 @@ export class Valuation {
       throw new ValuationError(`Feed ${feed} reported implausible decimals: ${decimals}`);
     }
 
+    // An unreadable timestamp is not a fresh one. `updatedAt > 0` meant a feed
+    // reporting it as hex, as an ISO string, or not at all silently disabled
+    // the only check standing between the treasury and an unknown price —
+    // while everything else on this path fails closed.
+    if (updatedAt <= 0) {
+      throw new ValuationError(
+        `Feed ${feed} reported no usable publish time, so its age cannot be checked. ` +
+          `Refusing to value a movement against a price of unknown vintage.`,
+      );
+    }
+
     const age = Math.floor(Date.now() / 1000) - updatedAt;
-    if (updatedAt > 0 && age > this.maxAgeSeconds) {
+    if (age > this.maxAgeSeconds) {
       throw new ValuationError(
         `Feed ${feed} last published ${age}s ago, over the ${this.maxAgeSeconds}s limit. ` +
           `Refusing to value a movement against a stale price.`,
