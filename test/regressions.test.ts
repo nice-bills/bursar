@@ -635,3 +635,44 @@ describe("settlement pays the approved invoice, or nothing", () => {
     });
   });
 });
+
+describe("a tool result is only read as a payment challenge when it is one", () => {
+  test("a successful result carrying an accepts array is still read as a challenge", async () => {
+    // Gating strictly on isError would have broken the marketplace proof if the
+    // server returns its 402 as a successful tool result — which is its choice.
+    const { readPaymentChallenge } = await import("../src/keeperhub/mcp.js");
+    const challenge = readPaymentChallenge(
+      {
+        accepts: [
+          {
+            scheme: "exact",
+            network: "eip155:8453",
+            maxAmountRequired: "10000",
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            payTo: "0x8d9abc5b07917229159886be02e5eed1dc7fbdc9",
+          },
+        ],
+      },
+      "",
+    );
+    assert.ok(challenge, "an accepts array is unmistakably a challenge");
+    assert.equal(challenge.maxAmountRequired, "10000");
+  });
+
+  test("a successful result that merely contains the number 402 is not a challenge", async () => {
+    const { readPaymentChallenge } = await import("../src/keeperhub/mcp.js");
+    // The loose "is 402 anywhere in the text" match is what used to fire on a
+    // block number. It is only consulted for error results now, so a success
+    // body has to be read structurally — and this one has no price and no payee.
+    assert.equal(
+      readPaymentChallenge({ blockNumber: 402, success: true }, ""),
+      null,
+      "a block number is not a price",
+    );
+    assert.equal(
+      readPaymentChallenge({ chainId: 402, amountTransferred: "1000" }, ""),
+      null,
+      "an echoed amount with no payee is not a challenge",
+    );
+  });
+});

@@ -168,16 +168,22 @@ export class KeeperHubMcp {
     const parsed = parseEmbeddedJson(text);
     const isError = Boolean(response.result?.isError || response.error);
 
-    return {
-      isError,
-      text,
-      json: parsed,
-      // Only an ERROR result can be a payment challenge. Read unconditionally,
-      // a successful result that merely echoes an `amount` or a `payTo` — or
-      // contains a standalone 402 anywhere, a block number will do — was
-      // reported as the listing demanding payment.
-      challenge: isError ? readPaymentChallenge(parsed, text) : null,
-    };
+    // A successful result that merely echoes an `amount` or a `payTo` — or
+    // contains a standalone 402 anywhere, a block number will do — used to be
+    // reported as the listing demanding payment.
+    //
+    // But gating strictly on `isError` assumes a 402 always arrives as an error
+    // result, which is the server's choice and not something this code can rely
+    // on. So: an error result is read as before, and a successful one is only
+    // read when the body is unmistakably a challenge — an `accepts` array, or
+    // an explicit x402 marker — never on the loose text match.
+    const challenge = isError
+      ? readPaymentChallenge(parsed, text)
+      : looksLikeChallenge(parsed)
+        ? readPaymentChallenge(parsed, "")
+        : null;
+
+    return { isError, text, json: parsed, challenge };
   }
 
   /** The server's tool definitions — what mounting it would put in a prompt. */
@@ -481,6 +487,24 @@ export function parseEmbeddedJson(text: string): unknown {
  * still counts, because a challenge we cannot decode is still a challenge and
  * silently reading it as "free" would be the dangerous mistake.
  */
+/**
+ * Is this body unmistakably an x402 challenge, rather than a result that merely
+ * happens to contain a number?
+ *
+ * Deliberately structural. The loose "is 402 in the text" fallback is fine for
+ * a body already known to be an error, and far too eager for one that is not.
+ */
+function looksLikeChallenge(json: unknown): boolean {
+  const body = json as Record<string, unknown> | null;
+  if (!body || typeof body !== "object") return false;
+  if (Array.isArray(body.accepts) && body.accepts.length > 0) return true;
+  if (body.x402Version !== undefined) return true;
+  // A bare payment requirement: a payee AND a price, not one or the other.
+  const hasPayee = typeof body.payTo === "string";
+  const hasPrice = body.maxAmountRequired !== undefined || body.amount !== undefined;
+  return hasPayee && hasPrice;
+}
+
 export function readPaymentChallenge(json: unknown, text = ""): PaymentChallenge | null {
   const envelope = json as Record<string, unknown> | null;
   const accepts = envelope?.accepts;
