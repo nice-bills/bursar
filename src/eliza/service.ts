@@ -699,7 +699,7 @@ export class BursarService extends Service {
    * ledger. Every confirmed line carries its transaction hash, so the report
    * is verifiable rather than merely claimed.
    */
-  async statement(): Promise<string> {
+  async statement(recent = 10): Promise<string> {
     const entries = [...(await this.ledger.latestByIntent()).values()].sort((a, b) =>
       a.at.localeCompare(b.at),
     );
@@ -711,10 +711,13 @@ export class BursarService extends Service {
     const lines: string[] = [];
     const totals = new Map<string, bigint>();
 
-    for (const entry of entries) {
+    for (const [index, entry] of entries.entries()) {
       const amount = formatUnits(BigInt(entry.amount), entry.decimals);
-      const link = entry.transactionLinks?.[0] ?? entry.transactionHashes?.[0] ?? "";
-      lines.push(
+      // An early build wrote a stringified object where a hash belonged; a
+      // statement that prints "[object Object]" as proof is worse than none.
+      const hash = entry.transactionHashes?.find((h) => /^0x[0-9a-fA-F]{64}$/.test(h));
+      const link = entry.transactionLinks?.[0] ?? hash ?? "";
+      if (index >= entries.length - recent) lines.push(
         `${entry.at}  ${entry.status.padEnd(9)} ${entry.leg.padEnd(6)} ` +
           `${amount} -> ${entry.to}${link ? `  ${link}` : ""}`,
       );
@@ -743,7 +746,9 @@ export class BursarService extends Service {
 
     const open = entries.filter((e) => e.status === "intent" || e.status === "submitted").length;
 
+    const earlier = entries.length - lines.length;
     return [
+      ...(earlier > 0 ? [`(${earlier} earlier movement(s) not shown; totals cover all of them)`] : []),
       lines.join("\n"),
       "",
       `Confirmed totals — ${summary || "none"}`,

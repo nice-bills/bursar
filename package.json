@@ -17,6 +17,7 @@
     "listing": "tsx scripts/listing.ts",
     "chaos": "tsx scripts/chaos.ts",
     "agent": "tsx scripts/agent.ts",
+    "chat": "LOG_LEVEL=fatal DOTENV_CONFIG_QUIET=true tsx scripts/chat.ts",
     "context-cost": "tsx scripts/context-cost.ts",
     "prepare": "npm run build",
     "aave": "tsx scripts/aave.ts",
