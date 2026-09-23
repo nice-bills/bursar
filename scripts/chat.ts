@@ -162,6 +162,7 @@ async function main(): Promise<void> {
     const callback = async (content: Content) => {
       const out = String(content.text ?? "").trim();
       if (out && !said.has(out)) {
+        if (said.size === 0) process.stdout.write("\r\x1b[K"); // clear "thinking…"
         said.add(out);
         const [first, ...rest] = out.split("\n");
         console.log(`${bold(cyan(runtime.character.name + " ›"))} ${first}`);
@@ -170,6 +171,8 @@ async function main(): Promise<void> {
       return [];
     };
 
+    // Keystrokes typed while the agent works would echo into its reply.
+    rl.pause();
     process.stdout.write(dim("  thinking…"));
     let answered = false;
     // Free endpoints go "temporarily overloaded" without warning; move on to
@@ -193,6 +196,7 @@ async function main(): Promise<void> {
     }
     if (!answered) console.log(dim("  no model answered — ask again"));
     console.log();
+    rl.resume();
   }
 
   rl.close();
